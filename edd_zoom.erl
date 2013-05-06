@@ -7,6 +7,7 @@
 %CUIDAO: EL APPLY ES TRADUEIX A UN CALL. SI EL MODULO NO EXPORTA EIX FUNCIO ES UN ERROR
 %poner los cases y sobretodo sus argumentos de manera que al traducir a Core no haya mas de un case en la misma linea 
 %las list comprehension en el apply
+%Les variables que gasten les funcions anonimes quant es substituixen deurien de eixir en el context
 
 zoom_graph(Expr)->
 	%Clause = 1, %Te que ser un parametro
@@ -44,7 +45,7 @@ zoom_graph(Expr)->
 	% {FunDef,TotalClauses,VarsClause} = 	
 	%    get_fundef_and_vars_clause(ModName,FunName,FunArity,Clause),
 	TotalClauses = 1,
-	RootInfo = {root,{AExpr,AValue}},
+	RootInfo = {root,{AExpr,AValue},[]},
 	NFreeV = 
 	    case TotalClauses of
 	         1 -> 
@@ -205,7 +206,13 @@ get_fun_from_file(File,Line,Env) ->
 					VarName = erl_syntax:variable_name(T),
 					case lists:member(VarName,VarsOnlyInBody) of 
 						true ->
-							get_abstract_form(bind_vars(cerl:c_var(VarName),Env));
+							BVars = bind_vars(cerl:c_var(VarName),Env),
+							case is_atom(BVars) of
+								true ->
+									erl_syntax:variable(BVars);
+								false ->
+									get_abstract_form(BVars)
+							end;
 						false ->
 							T
 					end;
@@ -276,12 +283,16 @@ bind_vars(Expr,Env) ->
 	          		             {c_literal,[],Arity}],
 			     	     	{c_call,[],{c_literal,[],erlang},{c_literal,[],make_fun},MFArgs};
 			     	     _ ->
-				     		{VarName,{Value,_,_}} = hd(ets:lookup(Env,VarName)),
-				     		%io:format("Value: ~p\n",[Value]),
-				     		case Value of
-			     	             {anonymous_function,_,_,_,_,_} -> Value;
-			     	             _ -> cerl:unfold_literal(Value)
-			     	        end
+			     	     	case ets:lookup(Env,VarName) of 
+			     	     		[{VarName,Value}|_] ->
+					     			case Value of
+					     	             {anonymous_function,_,_,_,_,_} -> Value;
+					     	             _ -> cerl:unfold_literal(Value)
+					     	        end;
+					     	    _ ->
+					     	    	%Esto se anyade porque get_fun_from_file no tiene en cuenta las variables que se declaran dentro del cuerpo de la función y intenta buscarlas
+					     	    	VarName
+					     	end
 			     	end;
 			     'values' -> 
 			     	Values = cerl:values_es(Expr),

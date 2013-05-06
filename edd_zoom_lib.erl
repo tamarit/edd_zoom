@@ -339,7 +339,9 @@ transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,S
 transform_label({fun_clause,{FunDef,ClauseNumber,PatGuard,SuccFail},[]}) ->
 	"Function:\n" ++ transform_value(FunDef)
     ++ "\n" ++ atom_to_list(PatGuard) ++ " of " ++ get_ordinal(ClauseNumber) 
-	++ " clause " ++ atom_to_list(SuccFail).
+	++ " clause " ++ atom_to_list(SuccFail);
+transform_label({'root',_,_}) -> 
+	"The problem is in one of the arguments of the call".
 
 
 transform_value(AFun = {'fun',_,_}) ->
