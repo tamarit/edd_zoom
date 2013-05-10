@@ -348,7 +348,7 @@ get_tree_case(Expr,Env,FreeV) ->
 	AbstractCase = 
 		case cerl:get_ann(Expr) of 
 			[Line,{file,FileName}] ->
-				io:format("Line buscada: ~p\n",[Line]),
+				%io:format("Line buscada: ~p\n",[Line]),
 				get_case_from_abstract(FileName,Line);
 			[] ->
 				[]
