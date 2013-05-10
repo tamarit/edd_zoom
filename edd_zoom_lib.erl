@@ -309,13 +309,22 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State) ->
 	
 ask_question(G,V)->
 	{V,Info} = digraph:vertex(G,V),
-	NLabel = transform_label(Info),
-	{_,_,Deps} = Info,
-	Context = get_context(Deps),
-	io:format("~s\nContext: ~s",[NLabel,Context]),
+	Question = build_question(Info),
+	io:format("~s",[Question]),
 	[_|Answer]=lists:reverse(io:get_line("? [y/n/d/i/s/u/a]: ")),
 	list_to_atom(lists:reverse(Answer)).
 	
+build_question(Info) ->
+	NLabel = transform_label(Info),
+	{_,_,Deps} = Info,
+	
+	case Deps of 
+		[] ->
+			io_lib:format("~s",[NLabel]);
+		_ ->
+			Context = get_context(Deps),
+			io_lib:format("~s\nContext: ~s",[NLabel,Context])
+	end.
 	
 transform_label({'let',{VarName,Value},_}) -> 
 	atom_to_list(VarName) ++ " = " ++ transform_value(Value);
@@ -341,7 +350,7 @@ transform_label({fun_clause,{FunDef,ClauseNumber,PatGuard,SuccFail},[]}) ->
     ++ "\n" ++ atom_to_list(PatGuard) ++ " of " ++ get_ordinal(ClauseNumber) 
 	++ " clause " ++ atom_to_list(SuccFail);
 transform_label({'root',_,_}) -> 
-	"The problem is in one of the arguments of the call".
+	"The problem is in one of the parameters or else in the final expression.".
 
 
 transform_value(AFun = {'fun',_,_}) ->
@@ -405,7 +414,7 @@ dot_graph(G)->
 dot_vertex({V,L}) ->
 	integer_to_list(V)++" "++"[shape=ellipse, label=\""
 	++integer_to_list(V)++" .- " 
-	++ change_new_lines(lists:flatten(io_lib:format("~p",[L]))) ++ "\"];\n".
+	++ change_new_lines(lists:flatten(build_question(L))) ++ "\"];\n".
 
 dot_edge({V1,V2}) -> 
 	integer_to_list(V1)++" -> "++integer_to_list(V2)

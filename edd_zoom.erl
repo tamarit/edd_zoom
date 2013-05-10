@@ -225,11 +225,11 @@ get_fun_from_file(File,Line,Env) ->
 get_funs_from_abstract(Abstract,Line) -> 
 	erl_syntax_lib:fold(fun(Tree,Acc) -> 
 	               		case Tree of 
-	               	    	     {'fun',Line,{clauses,_}} ->
+	               	    	{'fun',Line,{clauses,_}} ->
 	               	    		[Tree|Acc];
-	               	             {'fun',_,{clauses,_}} when Line =:= -1 ->
+	               	        {'fun',_,{clauses,_}} when Line =:= -1 ->
 	               	    		[Tree|Acc];
-	               	    	     _ -> 
+	               	    	_ -> 
 	               	    		Acc
 	               		end
 		    	     end, [], Abstract).
@@ -284,7 +284,7 @@ bind_vars(Expr,Env) ->
 			     	     	{c_call,[],{c_literal,[],erlang},{c_literal,[],make_fun},MFArgs};
 			     	     _ ->
 			     	     	case ets:lookup(Env,VarName) of 
-			     	     		[{VarName,Value}|_] ->
+			     	     		[{VarName,{Value,_,_}}|_] ->
 					     			case Value of
 					     	             {anonymous_function,_,_,_,_,_} -> Value;
 					     	             _ -> cerl:unfold_literal(Value)
@@ -317,17 +317,24 @@ bind_vars(Expr,Env) ->
 get_case_from_abstract(File,Line) -> 
 	{ok,Abstract} = smerl:for_file(File),
 	lists:flatten(
-		[erl_syntax_lib:fold(fun(Tree,Acc) -> 
-					%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
-		               		case Tree of 
-		               	    	     {'case',Line,_,_} ->
-		               	    		[{Tree,"Case"}|Acc];
-		               	             {'if',Line,_} ->
-		               	    		[{Tree,"If"}|Acc];
-		               	    	     _ -> 
-		               	    		Acc
-		               		end
-			    	     end, [], Form)||Form<-smerl:get_forms(Abstract)]).
+		[erl_syntax_lib:fold(
+			fun(Tree,Acc) -> 
+				%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
+	       		case Tree of 
+					{'case',Line,_,_} ->
+						[{Tree,"Case"}|Acc];
+					{'if',Line,_} ->
+						[{Tree,"If"}|Acc];
+					{'try',Line,_,_,_,_} ->
+						io:format("ENTRA\n"),
+						[{Tree,"Try"}|Acc];
+					% {'try',LINE,_,_,_,_} ->
+					% 	io:format("ENTRA: ~p\n",[LINE]),
+					% 	Acc;
+					_ -> 
+						Acc
+	       		end
+		     end, [], Form) || Form<-smerl:get_forms(Abstract)]).
 	
 get_tree_case(Expr,Env,FreeV) -> 
 	Args = cerl:case_arg(Expr),
@@ -341,6 +348,7 @@ get_tree_case(Expr,Env,FreeV) ->
 	AbstractCase = 
 		case cerl:get_ann(Expr) of 
 			[Line,{file,FileName}] ->
+				io:format("Line buscada: ~p\n",[Line]),
 				get_case_from_abstract(FileName,Line);
 			[] ->
 				[]
@@ -399,7 +407,7 @@ get_tree_case(Expr,Env,FreeV) ->
 				digraph:add_vertex(G,NNFreeV,
 					{case_if,{hd(AbstractCase),
 					 ConcreteBArg,ClauseNumber,
-					 cerl:concrete(Value)},Deps}),
+					 cerl:concrete(cerl:fold_literal(Value))},Deps}),
 				[begin
 					digraph:add_vertex(G,NumNode,
 						{case_if_clause,{hd(AbstractCase),ConcreteBArg,
@@ -762,13 +770,13 @@ get_tree(Expr,Env,FreeV) ->
 			LetArg = cerl:let_arg(Expr),
 			% io:format("LetArg: ~p\nVars: ~p\n",
 			% 	[LetArg,cerl_trees:variables(LetArg)]),
-			%We suppose that the letarg has not any let or case construction
-			{ValueArg,FreeV,[]} = 
+			%We ignore the graphs generated inside the delcaration of the variable
+			{ValueArg,NFreeV_,_} = 
 		     	get_tree(LetArg,Env,FreeV),
 		    Deps = get_dependences(cerl_trees:variables(LetArg),Env),
 		    %io:format("Deps: ~p\n",[Deps]),
 		    {GraphsArg,NFreeV} = 
-		    	build_graphs_and_add_bindings(Vars,Env,FreeV,ValueArg,Deps,[]),
+		    	build_graphs_and_add_bindings(Vars,Env,NFreeV_,ValueArg,Deps,[]),
 			%{NGraphsArg,NNFreeV} = changeRepeatedIds(GraphsArg,NFreeV),
 			case check_errors(ValueArg) of
 			     true -> 
