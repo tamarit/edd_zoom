@@ -84,7 +84,7 @@ ask(G,Strategy)->
 
 ask_about(G,Strategy,Vertices,Correct0,NotCorrect0) -> 
 	{Correct,NotCorrect,Unknown,_,NStrategy} = 
-	   asking_loop(G,Strategy,Vertices,Correct0,NotCorrect0,[],[]),
+	   asking_loop(G,Strategy,Vertices,Correct0,NotCorrect0,[],[],-1),
 	case NotCorrect of
 	     [-1] ->
 	     	io:format("Debugging process finished\n");
@@ -129,6 +129,24 @@ get_answer(Message,Answers) ->
         true -> AtomAnswer;
         false -> get_answer(Message,Answers)
    end.
+
+ask_question_dependeces(Deps) ->
+	{StringDeps,DictDeps} = string_dependences(Deps,1),
+	Message = 
+		"Related variables:\n" ++ StringDeps ++ "What value is wrong? ",
+	Answer = get_answer(Message,[list_to_atom(integer_to_list(Opt)) || {Opt,_} <-  DictDeps]),
+	IntAnswer = list_to_integer(atom_to_list(Answer)),
+	hd([V || {Opt,V} <-  DictDeps, Opt =:= IntAnswer ]).
+
+string_dependences([{Var,{Value,V}}|Tail],Opt) -> 
+	{STail,DictTail} = string_dependences(Tail,Opt + 1),
+	SVar = 
+		"\t" ++ integer_to_list(Opt) ++ ".- " 
+	  	++ atom_to_list(Var) ++ " = " ++ transform_value(Value) ++ "\n",
+	{SVar ++ STail,[{Opt,V}|DictTail]};
+string_dependences([],_) ->
+	{"",[]}.
+
  
 find_unknown_children(G,Unknown,[V|Vs]) ->
 	OutNeighbours = digraph:out_neighbours(G, V),
@@ -243,29 +261,36 @@ get_ordinal(N) ->
 	
 
 
-asking_loop(_,Strategy,[],Correct,NotCorrect,Unknown,State) -> 
+asking_loop(_,Strategy,[],Correct,NotCorrect,Unknown,State,_) -> 
 	{Correct,NotCorrect,Unknown,State,Strategy};
-asking_loop(_,Strategy,[-1],_,_,_,_) -> {[-1],[-1],[-1],[],Strategy};
-asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State) ->
-	VerticesWithValues = 
-	  case Strategy of 
-	       top_down ->
-	        Children = digraph:out_neighbours(G, hd(NotCorrect)),
-	        SelectableChildren = Children -- (Children -- Vertices), 
-			[{V, -length(digraph_utils:reachable([V], G))} 
-			 || V <- SelectableChildren];
-	       divide_query ->
-			 [{V,begin
-			         Reach = digraph_utils:reachable([V], G),
-			         TotalReach = length(Reach) - (1 + length(Reach -- Vertices)),
-			         Rest = (length(Vertices) - 1) - TotalReach,
-			         abs(TotalReach - Rest)
-			     end} || V <- Vertices]
-	  end,
-	SortedVertices = lists:keysort(2,VerticesWithValues),
-	Selected = element(1,hd(SortedVertices)),
-	NSortedVertices = [V || {V,_} <- tl(SortedVertices)],
-	YesAnswer = begin
+asking_loop(_,Strategy,[-1],_,_,_,_,_) -> {[-1],[-1],[-1],[],Strategy};
+asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
+	{Selected,NSortedVertices} = 
+		case PreSelected of
+			-1 ->
+				VerticesWithValues = 
+				  case Strategy of 
+				       top_down ->
+							Children = digraph:out_neighbours(G, hd(NotCorrect)),
+							SelectableChildren = Children -- (Children -- Vertices), 
+							[{V, -length(digraph_utils:reachable([V], G))} 
+							  || V <- SelectableChildren];
+				       divide_query ->
+							 [{V,begin
+							         Reach = digraph_utils:reachable([V], G),
+							         TotalReach = length(Reach) - (1 + length(Reach -- Vertices)),
+							         Rest = (length(Vertices) - 1) - TotalReach,
+							         abs(TotalReach - Rest)
+							     end} || V <- Vertices]
+				  end,				
+				SortedVertices = lists:keysort(2,VerticesWithValues),
+				Selected_ = element(1,hd(SortedVertices)),
+				NSortedVertices_ = [V || {V,_} <- tl(SortedVertices)],
+				{Selected_,NSortedVertices_};
+			_ ->
+				{PreSelected,Vertices--[PreSelected]}
+		end,
+	YesAnswer = %begin
 	             % EqualToSeleceted = 
 	             %    [V || V <- Vertices, begin {V,{L1,_}} = digraph:vertex(G,V),
 	             %                               {Selected,{L2,_}} = digraph:vertex(G,Selected),
@@ -273,39 +298,55 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State) ->
 	             %                         end],
 	             {NSortedVertices -- digraph_utils:reachable([Selected],G),
 	             [Selected|Correct],NotCorrect,Unknown,
-	             [{Vertices,Correct,NotCorrect,Unknown}|State],Strategy}
-	            end, 
+	             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1},
+	            %end, 
 	Answer = ask_question(G,Selected),
-	{NVertices,NCorrect,NNotCorrect,NUnknown,NState,NStrategy} = 
+	{NVertices,NCorrect,NNotCorrect,NUnknown,NState,NStrategy,NPreSelected} = 
 	   case Answer of
 	        y -> YesAnswer;
-	        i -> YesAnswer;
+	        i ->
+	        	{Selected,InfoSelected} = digraph:vertex(G,Selected),
+	        	{_,_,DepsSelected} = InfoSelected,
+	        	%io:format("DepsSelected: ~p\n", [DepsSelected]),
+	        	case DepsSelected of 
+	        		[] -> YesAnswer;
+	        		[{_,{_,NextQuestion}}] ->
+	        			{NSortedVertices -- digraph_utils:reachable([Selected],G),
+			             [Selected|Correct],NotCorrect,Unknown,
+			             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,NextQuestion};
+	        		_ -> 
+	        			NextQuestion = ask_question_dependeces(DepsSelected),
+	        			%Podria passar que estaguera entre els correct, notcorret o unknown?
+	        			{NSortedVertices -- digraph_utils:reachable([Selected],G),
+			             [Selected|Correct],NotCorrect,Unknown,
+			             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,NextQuestion}
+	        	end;
 	        n -> {digraph_utils:reachable([Selected],G)
 	              -- ([Selected|NotCorrect] ++ Correct ++ Unknown),
 	              Correct,[Selected|NotCorrect],Unknown,
-	              [{Vertices,Correct,NotCorrect,Unknown}|State],Strategy};
+	              [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
 	        d -> %Hacer memoization?
 	             {NSortedVertices -- [Selected],
 	              Correct,NotCorrect,[Selected|Unknown],
-	              [{Vertices,Correct,NotCorrect,Unknown}|State],Strategy};
+	              [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
 	        u -> case State of
 	                  [] ->
 	                     io:format("Nothing to undo\n"),
 	                     {Vertices,Correct,NotCorrect,Unknown,State};
-	                  [{PVertices,PCorrect,PNotCorrect,PUnknown}|PState] ->
-	                     {PVertices,PCorrect,PNotCorrect,PUnknown,PState,Strategy}
+	                  [{PVertices,PCorrect,PNotCorrect,PUnknown,PPreSelected}|PState] ->
+	                     {PVertices,PCorrect,PNotCorrect,PUnknown,PState,Strategy,PPreSelected}
 	             end;
 	        s -> case get_answer("Select a strategy (Didide & Query or "
 	                  ++"Top Down): [d/t] ",[d,t]) of
 	                  t -> 
-	                     {Vertices,Correct,NotCorrect,Unknown,State,top_down};
+	                     {Vertices,Correct,NotCorrect,Unknown,State,top_down,PreSelected};
 	                  d -> 
-	                     {Vertices,Correct,NotCorrect,Unknown,State,divide_query}
+	                     {Vertices,Correct,NotCorrect,Unknown,State,divide_query,PreSelected}
 	             end;
-	        a -> {[-1],Correct,NotCorrect,Unknown,State,Strategy};
-	        _ -> {Vertices,Correct,NotCorrect,Unknown,State,Strategy}
+	        a -> {[-1],Correct,NotCorrect,Unknown,State,Strategy,-1};
+	        _ -> {Vertices,Correct,NotCorrect,Unknown,State,Strategy,PreSelected}
 	   end, 
-	asking_loop(G,NStrategy,NVertices,NCorrect,NNotCorrect,NUnknown,NState).
+	asking_loop(G,NStrategy,NVertices,NCorrect,NNotCorrect,NUnknown,NState,NPreSelected).
 	
 ask_question(G,V)->
 	{V,Info} = digraph:vertex(G,V),
@@ -317,7 +358,6 @@ ask_question(G,V)->
 build_question(Info) ->
 	NLabel = transform_label(Info),
 	{_,_,Deps} = Info,
-	
 	case Deps of 
 		[] ->
 			io_lib:format("~s",[NLabel]);
@@ -343,7 +383,7 @@ transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,S
 			atom_to_list(PatGuard) ++ " of " 
 	end
 	++ get_ordinal(ClauseNumber) 
-	++ " clause " ++ atom_to_list(SuccFail) ++ "\nCase argument value :"
+	++ " clause " ++ atom_to_list(SuccFail) ++ "\n" ++ Type ++ " argument value :"
 	++ transform_value(ArgValue);
 transform_label({fun_clause,{FunDef,ClauseNumber,PatGuard,SuccFail},[]}) ->
 	"Function:\n" ++ transform_value(FunDef)
@@ -356,6 +396,8 @@ transform_label({'root',_,_}) ->
 transform_value(AFun = {'fun',_,_}) ->
 	erl_prettypr:format(AFun);
 transform_value(AFun = {'case',_,_,_}) ->
+	erl_prettypr:format(AFun);
+transform_value(AFun = {'try',_,_,_,_,_} ) ->
 	erl_prettypr:format(AFun);
 transform_value(AFun = {function,_,_,_,_}) ->
 	erl_prettypr:format(AFun);
