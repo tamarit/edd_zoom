@@ -13,7 +13,22 @@ zoom_graph(Expr)->
     {ok,[AExpr|_]} = edd_zoom_lib:parse_expr(Expr++"."),
     FunOperator = erl_syntax:application_operator(AExpr),
     FunArity = length(erl_syntax:application_arguments(AExpr)),
-    CoreArgs = [cerl:abstract(erl_syntax:concrete(Arg)) 
+    Env = ets:new(env,[set]),
+    CoreArgs = [
+    	try
+    		cerl:abstract(erl_syntax:concrete(Arg)) 
+    	catch
+    		_:_ -> 
+    			begin
+    				M1 = smerl:new(foo),
+					{ok, M2} = smerl:add_func(M1,"bar() ->" ++ erl_prettypr:format(Arg) ++ " ."),
+					%Obtiene el CORE de la expresión Expr
+					{ok,_,CoreP} = smerl:compile2(M2,[to_core,binary,no_copt]), 
+					CoreFun = extract_call(CoreP),
+					[{id,{_,_,FunName}},_,{file,File}] = cerl:get_ann(CoreFun),
+					{anonymous_function,FunName,CoreFun,File,Arg,ets:new(temp,[set])}
+    			end
+    	end
                 || Arg <- erl_syntax:application_arguments(AExpr)],
 	{remote,_,{atom,_,ModName},{atom,_,FunName}} = FunOperator,
 	Core = edd_zoom_lib:core_module(atom_to_list(ModName)++".erl"),
@@ -32,7 +47,6 @@ zoom_graph(Expr)->
 	    hd([FunctionDef_ || 
               	FunctionDef_ = {function,_,FunName_,Arity_,_} <- smerl:get_forms(M),
 		FunName_ =:= FunName, Arity_ =:= FunArity]),
-	Env = ets:new(env,[set]),
     ets:insert(Env,{initial_case,true}),
     ets:insert(Env,{function_definition, FunctionDef}),
     ets:insert(Env,{core,Core}),
@@ -73,6 +87,13 @@ check_errors(Value) ->
 	     {c_literal,[],{error,_}} -> true;
 	     _ -> false
 	end.
+
+extract_call(Core) ->
+	{c_module,_,_,_,_,FunDefs} = Core,
+	[{c_fun,_,_,FunBody}|_] = 
+		[FunBody_ || {{c_var,_,FunName},FunBody_} <- FunDefs, FunName == {bar,0}],
+	[{c_clause,_,_,_,Call}|_] = cerl:case_clauses(FunBody),
+	Call.
 
 % get_fundef_and_vars_clause(ModName,FunName,Arity,Clause) ->
 % 	{ok,M} = smerl:for_file(atom_to_list(ModName) ++ ".erl"),
@@ -185,7 +206,7 @@ get_fun_from_file(File,Line,Env) ->
 			hd(lists:flatten([get_funs_from_abstract(Form,Line) 
 			                  || Form <- smerl:get_forms(Abstract)]));
 		     {error, {invalid_module, _}} -> 
-		     	hd(get(funs_initial_call))
+		     	Line
 		end,
 	PatternsClause = 
 		[erl_syntax:clause_patterns(Clause) || Clause <- erl_syntax:fun_expr_clauses(AnoFun)],
@@ -314,20 +335,24 @@ bind_vars(Expr,Env) ->
 % create_new_env([],[],_) -> ok.
 
 get_case_from_abstract(File,Line) -> 
-	{ok,Abstract} = smerl:for_file(File),
-	lists:flatten(
-		[erl_syntax_lib:fold(
-			fun(Tree,Acc) -> 
-				%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
-	       		case Tree of 
-					{'case',Line,_,_} ->
-						[{Tree,"Case"}|Acc];
-					{'if',Line,_} ->
-						[{Tree,"If"}|Acc];
-					_ -> 
-						Acc
-	       		end
-		     end, [], Form) || Form<-smerl:get_forms(Abstract)]).
+	case smerl:for_file(File) of 
+		{ok,Abstract}  -> 
+			lists:flatten(
+				[erl_syntax_lib:fold(
+					fun(Tree,Acc) -> 
+						%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
+			       		case Tree of 
+							{'case',Line,_,_} ->
+								[{Tree,"Case"}|Acc];
+							{'if',Line,_} ->
+								[{Tree,"If"}|Acc];
+							_ -> 
+								Acc
+			       		end
+				     end, [], Form) || Form<-smerl:get_forms(Abstract)]);
+		_ ->
+			[]
+	end.
 		     
 get_try_from_abstract(File,Line,Type) -> 
 	{ok,Abstract} = smerl:for_file(File),
@@ -379,7 +404,17 @@ get_tree_case(Expr,Env,FreeV) ->
 		 or 
 		  ((length(ets:lookup(Env,initial_case)) =:= 1) 
 		  	andalso (hd(ets:lookup(Env,initial_case)) == {initial_case,true})),
-	Deps = get_dependences(cerl_trees:variables(Args),Env),
+	ListArgs = 
+		case cerl:type(Args) of
+			values ->
+				cerl:values_es(Args);
+			_ ->
+				[Args]
+		end,
+    %io:format("Args: ~p\n",[ListArgs]),
+	Deps = lists:flatten([try get_dependences(cerl_trees:variables(ArgsElem),Env) 
+						  catch _:_ -> []
+						  end || ArgsElem <- ListArgs]),
     Clauses = cerl:case_clauses(Expr),
 	{ClauseNumber,ClauseBody,Bindings,NFreeV,GraphsClauses} = 
 	  get_clause_body(Clauses,Clauses,HasAbstractOrIsInitial,BArgs,Env,FreeV,Deps,1),
@@ -858,7 +893,11 @@ get_tree(Expr,Env,FreeV) ->
 		'primop' ->
 		        {{c_literal,[],
 		          {error,cerl:concrete(cerl:primop_name(Expr)),
-		          [cerl:concrete(bind_vars(Arg,Env)) || Arg <- cerl:primop_args(Expr)]}},
+		          [
+		          	try cerl:concrete(bind_vars(Arg,Env))
+		          	catch _:_ -> bind_vars(Arg,Env)
+		          	end
+		          || Arg <- cerl:primop_args(Expr)]}},
 		        FreeV,[]};
 		_ -> throw({error,"Non treated expression",Expr}),
 		     {Expr,FreeV,[]}	
