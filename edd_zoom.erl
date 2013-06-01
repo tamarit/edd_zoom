@@ -165,6 +165,9 @@ add_bindings_to_env([{{c_var,_,VarName},Value,Deps,Node}| TailBindings],Env) ->
 add_bindings_to_env([{VarName,Value,Deps,Node}| TailBindings],Env) ->
 	ets:insert(Env,{VarName,{Value,Deps,Node}}),
 	add_bindings_to_env(TailBindings,Env);
+add_bindings_to_env([Other| TailBindings],Env) ->
+	ets:insert(Env,Other),
+	add_bindings_to_env(TailBindings,Env);
 add_bindings_to_env([],_) -> ok.
 
 get_dependences(Vars, Env) ->
@@ -801,7 +804,7 @@ get_tree_apply(Apply,Env0,FreeV)->
 		end.
 	
 get_tree_apply_fun(Args,NPars,FreeV,FunBody,Env0) ->
-	io:format("ENTRA: ~p\n",[Env0]),
+	%io:format("ENTRA: ~p\n",[Env0]),
 	Env = ets:new(env_temp, [set]),
 	add_bindings_to_env([ {Var, Value, [], null} || {Var,Value} <- lists:zip(Args,NPars)],Env),
 	%create_new_env(Args, NPars, Env),
@@ -814,6 +817,8 @@ get_tree_apply_fun(Args,NPars,FreeV,FunBody,Env0) ->
 
 get_tree(Expr,Env,FreeV) ->
 	%io:format("Expr: ~p\n",[Expr]),
+	%io:format("Type: ~p\n",[cerl:type(Expr)]),
+	%io:format("Env: ~p\n",[ets:tab2list(Env)]),
 	case cerl:type(Expr) of
 		'apply' ->
 			get_tree_apply(Expr,Env,FreeV);
@@ -885,7 +890,7 @@ get_tree(Expr,Env,FreeV) ->
 			   apply_substitution(Expr,Env,[]), % Sustituye las variables libres
 			EnvFun = ets:new(FunName,[set]),
 			ets:insert(EnvFun,ets:tab2list(Env)),
-			%io:format("Env: ~p\nEnvFun: ~p\n",[Env,EnvFun]),
+			%io:format("Env: ~p\nEnvFun: ~p\n",[ets:tab2list(Env),ets:tab2list(EnvFun)]),
 			%io:format("NExpr: ~p\n",[NExpr]),
 			% de la fun por sus valores
 			%io:format("New expr: ~p\n",[NExpr]),
