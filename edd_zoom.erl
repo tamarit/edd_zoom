@@ -73,7 +73,7 @@ zoom_graph(Expr)->
 	add_graphs_to_graph(G,Graphs),
 	[digraph:add_edge(G,FreeV,edd_zoom_lib:look_for_root(G_)) || G_ <- Graphs],
 	edd_zoom_lib:dot_graph_file(G,"dbg_zoom"),
-	edd_zoom_lib:ask(G,divide_query),
+	edd_zoom_lib:ask(G,top_down),
 	%io:format("Env final:\n~p\n",[ets:tab2list(Env)]),
 	ets:delete(Env),
 	ok.
@@ -115,7 +115,29 @@ get_tree_list([E|Es],Env,FreeV) ->
 get_tree_list([],_,FreeV) ->
 	{[],FreeV,[]}.
 
-build_graphs_and_add_bindings([Var | Vars],Env,FreeV,Value,Deps,GraphsAcc) ->
+build_graphs_and_add_bindings([{Var,Value,_,_}|Bins],Env,FreeV,Deps,ALet,InfoAcc) ->
+	{GraphsVar,_} = build_graphs_and_add_bindings([Var],Env,FreeV,Value,Deps,ALet,[]),
+	NInfoAcc = 
+		case GraphsVar of 
+			[] ->
+				InfoAcc;
+			[G] ->
+				{FreeV, {'let',{VarName,AValue,_},_}} = digraph:vertex(G,FreeV),
+				[{VarName,AValue}|InfoAcc]
+		end,
+	build_graphs_and_add_bindings(Bins,Env,FreeV,Deps,ALet,NInfoAcc);
+build_graphs_and_add_bindings([],_,FreeV,Deps,ALet,InfoAcc) ->
+	case InfoAcc of 
+		[] ->
+			{[],FreeV};
+		_ ->
+			%RevInfoAcc = lists:reverse(InfoAcc),
+			G = digraph:new([acyclic]),
+			digraph:add_vertex(G,FreeV,{'let_multiple',{InfoAcc,ALet},Deps}),
+			{[G],FreeV + 1 }
+	end.
+
+build_graphs_and_add_bindings([Var | Vars],Env,FreeV,Value,Deps,ALet,GraphsAcc) ->
 	VarName = cerl:var_name(Var),
 	case atom_to_list(VarName) of
 	     [$c,$o,$r | _] -> 
@@ -130,11 +152,11 @@ build_graphs_and_add_bindings([Var | Vars],Env,FreeV,Value,Deps,GraphsAcc) ->
 	     			_ ->
 	     				cerl:concrete(cerl:fold_literal(Value))
 	     		end,
-			digraph:add_vertex(G,FreeV,{'let',{VarName,ConcreteValue},Deps}),
+			digraph:add_vertex(G,FreeV,{'let',{VarName,ConcreteValue,ALet},Deps}),
 		    add_bindings_to_env([{Var,Value,Deps,FreeV}],Env),
-	        build_graphs_and_add_bindings(Vars,Env,FreeV + 1,Value,Deps,[G | GraphsAcc]) 
+	        build_graphs_and_add_bindings(Vars,Env,FreeV + 1,Value,Deps,ALet,[G | GraphsAcc]) 
 	end;
-build_graphs_and_add_bindings([],_,FreeV,_,_,GraphsAcc) -> 
+build_graphs_and_add_bindings([],_,FreeV,_,_,_,GraphsAcc) -> 
 	{GraphsAcc,FreeV}.
 
 add_bindings_to_env([{{c_var,_,VarName},Value,Deps,Node}| TailBindings],Env) ->
@@ -334,6 +356,24 @@ bind_vars(Expr,Env) ->
 % 	create_new_env(TailArgs,TailPars,Env);
 % create_new_env([],[],_) -> ok.
 
+get_match_from_abstract(File,Line) -> 
+	case smerl:for_file(File) of 
+		{ok,Abstract}  -> 
+			lists:flatten(
+				[erl_syntax_lib:fold(
+					fun(Tree,Acc) -> 
+						%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
+			       		case Tree of 
+							{'match',Line,_,_} ->
+								[Tree|Acc];
+							_ -> 
+								Acc
+			       		end
+				     end, [], Form) || Form<-smerl:get_forms(Abstract)]);
+		_ ->
+			[]
+	end.
+
 get_case_from_abstract(File,Line) -> 
 	case smerl:for_file(File) of 
 		{ok,Abstract}  -> 
@@ -370,7 +410,7 @@ get_try_from_abstract(File,Line,Type) ->
 	
 get_tree_case(Expr,Env,FreeV) -> 
 	Args = cerl:case_arg(Expr),
-	{ArgsValue,FreeV,_} = get_tree(Args,Env,FreeV),
+	{ArgsValue,_,_} = get_tree(Args,Env,FreeV),
 	BArgs_ = bind_vars(ArgsValue,Env),
 	BArgs = 
 		case cerl:type(BArgs_) of
@@ -416,9 +456,8 @@ get_tree_case(Expr,Env,FreeV) ->
 						  catch _:_ -> []
 						  end || ArgsElem <- ListArgs]),
     Clauses = cerl:case_clauses(Expr),
-	{ClauseNumber,ClauseBody,Bindings,NFreeV,GraphsClauses} = 
-	  get_clause_body(Clauses,Clauses,HasAbstractOrIsInitial,BArgs,Env,FreeV,Deps,1),
-	add_bindings_to_env(Bindings,Env),  
+	{ClauseNumber,ClauseBody,Bindings,NFreeV_,GraphsClauses} = 
+		get_clause_body(Clauses,Clauses,HasAbstractOrIsInitial,BArgs,Env,FreeV,Deps,1),
 	IsInitial = 
 		case ets:lookup(Env,initial_case) of 
 			[{initial_case,true}|_] ->
@@ -426,6 +465,23 @@ get_tree_case(Expr,Env,FreeV) ->
 				true;
 			_ ->
 				false
+		end,
+	%io:format("Bindings: ~p\n", [Bindings]),
+	{GraphsBindings,NFreeV} =
+		case HasAbstractOrIsInitial of 
+			false ->
+				ALet = 
+					case cerl:get_ann(Expr) of 
+						[Line_,{file,File_}] ->
+							get_match_from_abstract(File_,Line_);
+						_ ->
+							[]
+					end,
+				%io:format("ALetCase: ~p\n",[ALet]),
+				build_graphs_and_add_bindings(Bindings,Env,NFreeV_,Deps,ALet,[]);
+			_ ->
+				add_bindings_to_env(Bindings,Env),
+				{[],NFreeV_}
 		end,
 	{Value,NNFreeV,GraphsBody} = get_tree(ClauseBody,Env,NFreeV),
 	{NNNFreeV, CaseGraphs} = 
@@ -452,7 +508,7 @@ get_tree_case(Expr,Env,FreeV) ->
 										ok
 								end,
 								G
-							 end || {NumNode,TotalNodes,CaseClause,SuccFail} <- GraphsClauses],
+							 end || {NumNode,TotalNodes,CaseClause,_BindingsClause,SuccFail} <- GraphsClauses],
 						{NNFreeV, Gs ++ GraphsBody};
 					_ -> 
 						{NNFreeV, GraphsBody}
@@ -460,37 +516,45 @@ get_tree_case(Expr,Env,FreeV) ->
 			[_|_] -> 
 				G = digraph:new([acyclic]),
 				ConcreteBArg = hd([cerl:concrete(BArg) || BArg <- BArgs]),
-				digraph:add_vertex(G,NNFreeV,
-					{case_if,{hd(AbstractCase),
-					 ConcreteBArg,ClauseNumber,
-					 cerl:concrete(cerl:fold_literal(Value))},Deps}),
+				case ClauseNumber =:= length(Clauses) of 
+					true -> 
+						digraph:add_vertex(G,NNFreeV,
+							{case_if_failed,{hd(AbstractCase),
+							 ConcreteBArg,
+							 cerl:concrete(cerl:fold_literal(Value))},Deps});
+					false ->
+						digraph:add_vertex(G,NNFreeV,
+							{case_if,{hd(AbstractCase),
+							 ConcreteBArg,ClauseNumber,
+							 cerl:concrete(cerl:fold_literal(Value))},Deps})
+				end,
 				[begin
 					digraph:add_vertex(G,NumNode,
 						{case_if_clause,{hd(AbstractCase),ConcreteBArg,
-						 CaseClause,pattern,SuccFail},Deps}),
+						 CaseClause,pattern,SuccFail,BindingsClause},Deps}),
 					digraph:add_edge(G,NNFreeV,NumNode)	,
 					case TotalNodes of 
 						2 ->
 							digraph:add_vertex(G,NumNode + 1,
 								{case_if_clause,{hd(AbstractCase),ConcreteBArg,
-								 CaseClause,guard,SuccFail},Deps}),
+								 CaseClause,guard,SuccFail,BindingsClause},Deps}),
 							digraph:add_edge(G,NumNode, NumNode + 1);
 						_ ->
 							ok
 					end
-				 end || {NumNode,TotalNodes,CaseClause,SuccFail} <- GraphsClauses],
+				 end || {NumNode,TotalNodes,CaseClause,BindingsClause,SuccFail} <- GraphsClauses],
 				add_graphs_to_graph(G,GraphsBody),
 				[digraph:add_edge(G,NNFreeV,edd_zoom_lib:look_for_root(G_)) 
 				 	    || G_ <-  GraphsBody],
 				{NNFreeV + 1, [G]}
 		end,
 	%io:format("AbstractCase: ~p\nCaseGraphs: ~p\n",[AbstractCase,CaseGraphs]),
-	{Value, NNNFreeV, CaseGraphs}.
+	{Value, NNNFreeV, GraphsBindings ++ CaseGraphs}.
 
 get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,FreeV,Deps,ClauseNumber) ->
 	NClause = cerl:c_clause(cerl:clause_pats(Clause), cerl:clause_body(Clause)),
 	FunCreateFailedNode = 
-		fun(Type) ->
+		fun(Type,Bindings) ->
 			{NFreeV, GraphFailed} = 
 				case HasAbstractOrIsInitial of
 					false ->
@@ -498,9 +562,9 @@ get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,F
 				    true ->
 				      case Type of 
 				      	guard -> 
-				      		{FreeV + 2,[{FreeV,2,ClauseNumber,failed}]};
+				      		{FreeV + 2,[{FreeV,2,ClauseNumber,Bindings,failed}]};
 				      	pattern -> 
-				      		{FreeV + 1,[{FreeV,1,ClauseNumber,failed}]}
+				      		{FreeV + 1,[{FreeV,1,ClauseNumber,Bindings,failed}]}
 				      end
 				  end,
 	       	{SelectedClause,NClauseBody,NBindings,NNFreeV,Graphs} =
@@ -523,19 +587,20 @@ get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,F
 					{GuardValue,FreeV,[]} = 
 						get_tree(cerl:clause_guard(Clause),TempEnv,FreeV),
 					ets:delete(TempEnv),
+					%io:format("Bindings: ~p\nRemoving: ~p\n", [Bindings,remove_core_vars_from_env(Bindings)]),
 					case cerl:concrete(GuardValue) of
 					     true -> 
 					     	{NFreeV,GraphGuardSucceeds} = 
-					      	   case HasAbstractOrIsInitial of
+					      	   case HasAbstractOrIsInitial and (Clauses =/= []) of
 					      	   		true ->
 					      	   			%io:format("cerl:clause_guard(Clause): ~p\n",[cerl:clause_guard(Clause)]),
 					      	   			case cerl:clause_guard(Clause) of 
 					      	   				{c_literal,[],true} ->
 							      	   			{FreeV + 1,
-							      	   			 [{FreeV,1,ClauseNumber,succeed}]};
+							      	   			 [{FreeV,1,ClauseNumber,remove_core_vars_from_env(Bindings),succeed}]};
 							      	   		_ ->
 							      	   			{FreeV + 2,
-							      	   			 [{FreeV,2,ClauseNumber,succeed}]}
+							      	   			 [{FreeV,2,ClauseNumber,remove_core_vars_from_env(Bindings),succeed}]}
 							      	   	end;
 					      	        false ->
 					      	          	{FreeV,[]}
@@ -552,16 +617,26 @@ get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,F
 					      	 [{BinVar, BinValue, Deps, Node} || {BinVar, BinValue} <- Bindings],
 					     	{ClauseNumber,ClauseBody,NBindings,NFreeV,GraphGuardSucceeds};
 					     false ->
-					      	FunCreateFailedNode(guard)
+					      	FunCreateFailedNode(guard,remove_core_vars_from_env(Bindings))
 					end;
 				_ -> 
-				 	FunCreateFailedNode(pattern)
+				 	FunCreateFailedNode(pattern,[])
 			end;
 		_ -> 
-			FunCreateFailedNode(pattern)
+			FunCreateFailedNode(pattern,[])
 	end;
 get_clause_body([],_,_,_,_,_,_,_) -> 
 	throw({error,"Non matching clause exists"}).
+
+remove_core_vars_from_env([{Var,Value} | Tail]) ->
+	VarName = cerl:var_name(Var),
+	case atom_to_list(VarName) of
+	    [$c,$o,$r | _] ->
+	     	 remove_core_vars_from_env(Tail);
+     	_ -> 
+     		[{VarName,cerl:concrete(Value)} |remove_core_vars_from_env(Tail)]
+	end;
+remove_core_vars_from_env([]) -> [].
 
 add_graphs_to_graph(G,Graphs) ->
 	[begin 
@@ -580,6 +655,7 @@ get_tree_call(Call,Env0,FreeV) ->
 	Args = cerl:call_args(Call),
 	%Quitar funciones de esta lista
 	%io:format("Args: ~p\n",[[cerl:call_module(Call),cerl:call_name(Call)|Args]]),
+	%io:format("Env: ~p\n",[ets:tab2list(Env0)]),
 	%io:format("GraphVars: ~p\n",[GraphVars]),
 %	io:format("FUNCTION CALL ~p:~p/~p\n",[ModName,FunName,FunArity]),
     BArgs = lists:map(fun(Arg) -> bind_vars(Arg,Env0) end,Args),
@@ -705,10 +781,10 @@ get_tree_apply(Apply,Env0,FreeV)->
 					     _ -> % Apply de una variable
 					     	BFunVar = bind_vars(FunVar,Env0),
 					     	case BFunVar of
-					     	     {anonymous_function,_,{c_fun,_,Args,FunBody},_,_,_} -> % Se enlaza a una función anónima
+					     	     {anonymous_function,_,{c_fun,_,Args,FunBody},_,_,EnvAFun} -> % Se enlaza a una función anónima
 					     	        % {anonymous,{c_fun,_,Args,FunBody},_,_,_} = 
 					     	        %         get_anon_func(EnvAF,FunName,FunCore),
-						           get_tree_apply_fun(Args,NPars,FreeV,FunBody,[]);
+						           get_tree_apply_fun(Args,NPars,FreeV,FunBody,ets:tab2list(EnvAFun));
 					     	     _ -> % Caso de un make_fun
 							     	{ModName,FunName,_} = get_MFA(BFunVar),
 							     	get_tree_call({c_call,cerl:get_ann(Apply),
@@ -725,6 +801,7 @@ get_tree_apply(Apply,Env0,FreeV)->
 		end.
 	
 get_tree_apply_fun(Args,NPars,FreeV,FunBody,Env0) ->
+	io:format("ENTRA: ~p\n",[Env0]),
 	Env = ets:new(env_temp, [set]),
 	add_bindings_to_env([ {Var, Value, [], null} || {Var,Value} <- lists:zip(Args,NPars)],Env),
 	%create_new_env(Args, NPars, Env),
@@ -745,6 +822,14 @@ get_tree(Expr,Env,FreeV) ->
 		'let' ->
 			Vars = cerl:let_vars(Expr),
 			LetArg = cerl:let_arg(Expr),
+			ALet = 
+				case cerl:get_ann(hd(Vars)) of 
+					[Line,{file,File}] ->
+						get_match_from_abstract(File,Line);
+					_ ->
+						[]
+				end,
+			%io:format("ALet: ~p\n",[ALet]),
 			% io:format("LetArg: ~p\nVars: ~p\n",
 			% 	[LetArg,cerl_trees:variables(LetArg)]),
 			%We ignore the graphs generated inside the delcaration of the variable
@@ -753,7 +838,7 @@ get_tree(Expr,Env,FreeV) ->
 		    Deps = get_dependences(cerl_trees:variables(LetArg),Env),
 		    %io:format("Deps: ~p\n",[Deps]),
 		    {GraphsArg,NFreeV} = 
-		    	build_graphs_and_add_bindings(Vars,Env,FreeV,ValueArg,Deps,[]),
+		    	build_graphs_and_add_bindings(Vars,Env,FreeV,ValueArg,Deps,ALet,[]),
 			%{NGraphsArg,NNFreeV} = changeRepeatedIds(GraphsArg,NFreeV),
 			case check_errors(ValueArg) of
 			     true -> 
@@ -766,8 +851,11 @@ get_tree(Expr,Env,FreeV) ->
 			end;
 		'letrec' ->
 			%les definicions poden gastar variables declarades abans? Si es aixi hi hauria que tractaro
-			NewDefs = cerl:letrec_defs(Expr),
-			{core,Core} = hd(ets:lookup(core,Env)),
+			NewDefs_ = cerl:letrec_defs(Expr),
+			NewDefs = 
+				[begin {Value,_,_} = get_tree(FunDef,Env,FreeV), {VarName,Value} end 
+				 || {VarName,FunDef} <- NewDefs_],
+			{core,Core} = hd(ets:lookup(Env,core)),
 			NCore =	cerl:c_module(cerl:module_name(Core), 
 					 	cerl:module_exports(Core),
 					 	cerl:module_attrs(Core),
@@ -784,13 +872,20 @@ get_tree(Expr,Env,FreeV) ->
 			     	get_tree_call(Expr,Env,FreeV)
 			end;
 		'fun' -> 
-			[{id,{_,_,FunName}},Line,{file,File}] = cerl:get_ann(Expr),
+			FunName =
+				case cerl:get_ann(Expr) of 
+					[{id,{_,_,FunName_}},Line,{file,File}] ->
+						 FunName_;
+					[Line,{file,File}] ->
+						list_to_atom("let_rec_" ++ File ++ "_" ++ integer_to_list(Line))  
+				end,
 			%io:format("Previous expr: ~p\n",[Expr]),
 			%io:format("\n\nVars: ~p\n\n\n",[cerl_trees:variables(Expr)]),
 			NExpr = 
 			   apply_substitution(Expr,Env,[]), % Sustituye las variables libres
 			EnvFun = ets:new(FunName,[set]),
 			ets:insert(EnvFun,ets:tab2list(Env)),
+			%io:format("Env: ~p\nEnvFun: ~p\n",[Env,EnvFun]),
 			%io:format("NExpr: ~p\n",[NExpr]),
 			% de la fun por sus valores
 			%io:format("New expr: ~p\n",[NExpr]),

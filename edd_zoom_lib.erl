@@ -191,9 +191,6 @@ print_buggy_node(G,NotCorrectVertex,Message) ->
 % 					io:format("~s\n",[ClauseStr])
 % 			end
 % 	end.
-
-	
-	
 % get_MFA_Label(G,Vertex) ->
 % 	{Vertex,{Label,_}} = digraph:vertex(G,Vertex),
 % 	FlattenLabel = lists:flatten(Label),
@@ -366,15 +363,22 @@ build_question(Info) ->
 			io_lib:format("~s\nContext: ~s",[NLabel,Context])
 	end.
 	
-transform_label({'let',{VarName,Value},_}) -> 
+transform_label({'let',{VarName,Value,_},_}) -> 
 	atom_to_list(VarName) ++ " = " ++ transform_value(Value);
+transform_label({'let_multiple',{InfoVars,_},_}) -> 
+	get_context(InfoVars);
 transform_label({case_if,{{ACase,Type},ArgValue,ClauseNumber,FinalValue},_}) ->
 	Type ++ " expression:\n" ++ transform_value(ACase)++
      "\nenters in the " ++ get_ordinal(ClauseNumber) 
      ++ " clause.\nCase argument value: " ++ transform_value(ArgValue)
      ++ "\nFinal case value: " ++ transform_value(FinalValue);
-transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,SuccFail}, _}) ->
-	Type ++ " expression:\n" ++ transform_value(ACase)
+transform_label({case_if_failed,{{ACase,Type},ArgValue,FinalValue},_}) ->
+	Type ++ " expression:\n" ++ transform_value(ACase)++
+     "\ndoes not enter in any clause."
+     ++ "\nCase argument value: " ++ transform_value(ArgValue)
+     ++ "\nFinal case value: " ++ transform_value(FinalValue);
+transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,SuccFail,Bindings}, _}) ->
+	Type ++ " expression:\n" ++ transform_value(only_one_case_clause(ACase,ClauseNumber))
 	++ "\n" ++ 
 	case PatGuard of
 		'pattern' ->
@@ -384,9 +388,15 @@ transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,S
 	end
 	++ get_ordinal(ClauseNumber) 
 	++ " clause " ++ atom_to_list(SuccFail) ++ "\n" ++ Type ++ " argument value :"
-	++ transform_value(ArgValue);
+	++ transform_value(ArgValue) ++
+	case Bindings of 
+		[] -> 
+			"";
+		_ ->
+			"\nBindings: " ++ get_context(Bindings)
+	end;
 transform_label({fun_clause,{FunDef,ClauseNumber,PatGuard,SuccFail},[]}) ->
-	"Function:\n" ++ transform_value(FunDef)
+	"Function:\n" ++ transform_value(only_one_fun_clause(FunDef,ClauseNumber))
     ++ "\n" ++ atom_to_list(PatGuard) ++ " of " ++ get_ordinal(ClauseNumber) 
 	++ " clause " ++ atom_to_list(SuccFail);
 transform_label({'root',_,_}) -> 
@@ -409,7 +419,14 @@ get_context([]) -> "";
 get_context(Deps) ->
 	"[" ++ get_context(Deps,[]) ++ "]".
 
-get_context([{VarName,{Value,_}}|Deps],Acc) ->
+get_context([Entry|Deps],Acc) ->
+	{VarName,Value} = 
+		case Entry of 
+			{VarName_,{Value_,_}} -> 
+				{VarName_,Value_};
+			{VarName_,Value_} ->
+				{VarName_,Value_}
+		end,
 	VarValue =
 		atom_to_list(VarName) ++ " = " ++ transform_value(Value),
 	case Deps of 
@@ -418,6 +435,31 @@ get_context([{VarName,{Value,_}}|Deps],Acc) ->
 		_ -> 
 			get_context(Deps, Acc ++ VarValue ++ ", " )
 	end.
+
+only_one_case_clause(ACase,ClauseNumber) ->
+	case erl_syntax:type(ACase) of 
+		case_expr ->
+			Clauses = erl_syntax:case_expr_clauses(ACase),
+			Clause = lists:nth(ClauseNumber,Clauses),
+			erl_syntax:revert(erl_syntax:case_expr(erl_syntax:case_expr_argument(ACase),[Clause]));
+		if_expr ->
+			Clauses = erl_syntax:if_expr_clauses(ACase),
+			Clause = lists:nth(ClauseNumber,Clauses),
+			erl_syntax:revert(erl_syntax:if_expr([Clause]));
+		try_expr ->
+			Clauses = erl_syntax:try_expr_clauses(ACase),
+			Clause = lists:nth(ClauseNumber,Clauses),
+			erl_syntax:revert(erl_syntax:try_expr(
+				erl_syntax:try_expr_body(ACase),
+				[Clause],
+				erl_syntax:try_expr_handlers(ACase),
+				erl_syntax:try_expr_after(ACase)))
+	end.
+
+only_one_fun_clause(AFun,ClauseNumber) ->
+	Clauses = erl_syntax:function_clauses(AFun),
+	Clause = lists:nth(ClauseNumber,Clauses),
+	erl_syntax:revert(erl_syntax:function(erl_syntax:function_name(AFun),[Clause])).
 	
 % analyze_tokens([]) -> {ok,[]};
 % analyze_tokens([H|T]) -> 
