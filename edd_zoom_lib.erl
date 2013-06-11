@@ -346,39 +346,89 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 	asking_loop(G,NStrategy,NVertices,NCorrect,NNotCorrect,NUnknown,NState,NPreSelected).
 	
 ask_question(G,V)->
+	Options = "? [y/n/d/i/s/u/a]: ",
 	{V,Info} = digraph:vertex(G,V),
 	Question = build_question(Info),
 	io:format("~s",[Question]),
-	[_|Answer]=lists:reverse(io:get_line("? [y/n/d/i/s/u/a]: ")),
-	list_to_atom(lists:reverse(Answer)).
-	
+	[_|Answer]=lists:reverse(io:get_line(Options)),
+	AtomAnswer = list_to_atom(lists:reverse(Answer)),
+	case Info of 
+		{case_if,{{_,Type},_,_,Value,_},_} ->
+			case AtomAnswer of 
+				y ->
+					Question2 = build_question({case_if,{Type,Value}}),
+					io:format("~s",[Question2]),
+					[_|Answer2]=lists:reverse(io:get_line(Options)),
+					list_to_atom(lists:reverse(Answer2));
+				_ ->
+					AtomAnswer
+			end;
+		_ ->
+			AtomAnswer
+	end.
+
+build_question({case_if,{Type,Value}}) ->
+	"The final value of the " ++ Type 
+	++ " expression is " ++ transform_value(Value);
+build_question({case_if,{{ACase,Type},ArgValue,ClauseNumber,_,_},Deps}) ->
+	Label1 = 
+		case Deps of 
+			[] ->
+				"";
+			_ ->
+				" the context " ++ get_context(Deps) ++ "\n"
+		end,
+	Label2 = 
+		case ArgValue of 
+			[] -> 
+				"";
+			_ ->
+				case Label1 of 
+					"" -> "";
+					_ -> "and "
+				end 
+				++ "the " ++ Type ++ " argument value " 
+				++ transform_value(ArgValue) ++ ".\n"
+		end,
+	Label0 = 
+		case Label1 ++ Label2 of 
+			"" -> "";
+			_ -> "Given"
+		end,
+	Label3 = "The " ++ Type ++ " expression\n" 
+		++ transform_abstract(ACase) ++"\nenters in the " 
+		++ get_ordinal(ClauseNumber) ++ " clause",
+	Label0 ++ Label1 ++ Label2 ++ Label3;
 build_question(Info) ->
-	NLabel = transform_label(Info),
+	Label = transform_label(Info),
 	{_,_,Deps} = Info,
 	case Deps of 
 		[] ->
-			io_lib:format("~s",[NLabel]);
+			io_lib:format("~s",[Label]);
 		_ ->
 			Context = get_context(Deps),
-			io_lib:format("~s\nContext: ~s",[NLabel,Context])
+			io_lib:format("~s\nContext: ~s",[Label,Context])
 	end.
 	
 transform_label({'let',{VarName,Value,_},_}) -> 
 	atom_to_list(VarName) ++ " = " ++ transform_value(Value);
 transform_label({'let_multiple',{InfoVars,_},_}) -> 
 	get_context(InfoVars);
-transform_label({case_if,{{ACase,Type},ArgValue,ClauseNumber,FinalValue},_}) ->
-	Type ++ " expression:\n" ++ transform_value(ACase)++
-     "\nenters in the " ++ get_ordinal(ClauseNumber) 
-     ++ " clause.\nCase argument value: " ++ transform_value(ArgValue)
-     ++ "\nFinal case value: " ++ transform_value(FinalValue);
+% transform_label({case_if,{{ACase,Type},ArgValue,ClauseNumber,FinalValue,AFinalExpr},_}) ->
+% 	Type ++ " expression:\n" ++ transform_value(ACase) ++
+%      "\nenters in the " ++ get_ordinal(ClauseNumber) 
+%      ++ " clause.\nCase argument value: " ++ transform_value(ArgValue)
+%      ++ "\nFinal case value: " ++ transform_value(FinalValue);
+transform_label({case_if,{{_,_},_,_,FinalValue,AFinalExpr},_}) ->
+	%"The " ++ Type ++ " expression:\n" ++ transform_value(ACase) ++ "\n" ++
+     final_expression_message(FinalValue,AFinalExpr);
 transform_label({case_if_failed,{{ACase,Type},ArgValue,FinalValue},_}) ->
-	Type ++ " expression:\n" ++ transform_value(ACase)++
+	"The " ++ Type ++ " expression:\n" ++ transform_abstract(ACase)++
      "\ndoes not enter in any clause."
      ++ "\nCase argument value: " ++ transform_value(ArgValue)
      ++ "\nFinal case value: " ++ transform_value(FinalValue);
 transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,SuccFail,Bindings}, _}) ->
-	Type ++ " expression:\n" ++ transform_value(only_one_case_clause(ACase,ClauseNumber))
+	"The " ++ Type ++ " expression:\n" ++ transform_abstract(only_one_case_clause(ACase,ClauseNumber))
 	++ "\n" ++ 
 	case PatGuard of
 		'pattern' ->
@@ -396,23 +446,31 @@ transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,S
 			"\nBindings: " ++ get_context(Bindings)
 	end;
 transform_label({fun_clause,{FunDef,ClauseNumber,PatGuard,SuccFail},[]}) ->
-	"Function:\n" ++ transform_value(only_one_fun_clause(FunDef,ClauseNumber))
+	"Function:\n" ++ transform_abstract(only_one_fun_clause(FunDef,ClauseNumber))
     ++ "\n" ++ atom_to_list(PatGuard) ++ " of " ++ get_ordinal(ClauseNumber) 
 	++ " clause " ++ atom_to_list(SuccFail);
-transform_label({'root',_,_}) -> 
-	"The problem is in one of the parameters or else in the final expression.".
+transform_label({'root',{_,FinalValue,AFinalExpr},_}) -> 
+	final_expression_message(FinalValue,AFinalExpr).
+
+
 
 
 transform_value(AFun = {'fun',_,_}) ->
 	erl_prettypr:format(AFun);
-transform_value(AFun = {'case',_,_,_}) ->
-	erl_prettypr:format(AFun);
-transform_value(AFun = {'try',_,_,_,_,_} ) ->
-	erl_prettypr:format(AFun);
-transform_value(AFun = {function,_,_,_,_}) ->
-	erl_prettypr:format(AFun);
 transform_value(Value) ->
 	lists:flatten(io_lib:format("~p",[Value])).
+
+transform_abstract(Abstract) ->
+	erl_prettypr:format(Abstract).
+
+final_expression_message(FinalValue,AFinalExpr) ->
+	"The value " ++ transform_value(FinalValue) ++ " of the final expression " ++
+    case AFinalExpr of 
+     	[] -> "";
+     	[AFinalExpr_|_] -> 
+     		transform_abstract(AFinalExpr_) ++ " (Line " 
+     			++ integer_to_list(element(2,AFinalExpr_)) ++ ")"
+    end ++ " is not correct.".
 
 
 get_context([]) -> "";

@@ -50,7 +50,16 @@ zoom_graph(Expr)->
     ets:insert(Env,{initial_case,true}),
     ets:insert(Env,{function_definition, FunctionDef}),
     ets:insert(Env,{core,Core}),
-	{Value,FreeV,Graphs} = get_tree(InitialCall,Env,0), %{c_literal,[],1}
+	{Value,FreeV,Graphs,LastExprInfo} = get_tree(InitialCall,Env,0), %{c_literal,[],1}
+	ALastExpr = 
+		case LastExprInfo of 
+			[TypeLastExpr,Line,File] ->
+				get_expression_from_abstract(File,Line,TypeLastExpr);
+			[] -> 
+				[]
+		end,
+	
+
 	%io:format("Num. de grafos: ~p\n",[length(Graphs)]),
 	%io:format("Roots: ~p\n",[[edd_zoom_lib:look_for_root(G_) || G_ <- Graphs]]),
 	G = digraph:new([acyclic]),
@@ -58,7 +67,7 @@ zoom_graph(Expr)->
 	% {FunDef,TotalClauses,VarsClause} = 	
 	%    get_fundef_and_vars_clause(ModName,FunName,FunArity,Clause),
 	%TotalClauses = 1,
-	RootInfo = {root,{AExpr,AValue},[]},
+	RootInfo = {root,{AExpr,AValue,ALastExpr},[]},
 	% NFreeV = 
 	%     case TotalClauses of
 	%          1 -> 
@@ -109,7 +118,7 @@ extract_call(Core) ->
 % 	 sets:to_list(sets:union([erl_syntax_lib:variables(Pattern) || Pattern <- Patterns]))}.
 
 get_tree_list([E|Es],Env,FreeV) ->
-	{NE,NFreeV,GraphsH} = get_tree(bind_vars(E,Env),Env,FreeV),
+	{NE,NFreeV,GraphsH,_} = get_tree(bind_vars(E,Env),Env,FreeV),
 	{NEs,NNFreeV,GraphsT} = get_tree_list(Es,Env,NFreeV),
 	{[NE|NEs],NNFreeV,GraphsH++GraphsT};
 get_tree_list([],_,FreeV) ->
@@ -359,44 +368,46 @@ bind_vars(Expr,Env) ->
 % 	create_new_env(TailArgs,TailPars,Env);
 % create_new_env([],[],_) -> ok.
 
-get_match_from_abstract(File,Line) -> 
-	case smerl:for_file(File) of 
-		{ok,Abstract}  -> 
-			lists:flatten(
-				[erl_syntax_lib:fold(
-					fun(Tree,Acc) -> 
-						%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
-			       		case Tree of 
-							{'match',Line,_,_} ->
-								[Tree|Acc];
-							_ -> 
-								Acc
-			       		end
-				     end, [], Form) || Form<-smerl:get_forms(Abstract)]);
-		_ ->
-			[]
-	end.
 
-get_case_from_abstract(File,Line) -> 
-	case smerl:for_file(File) of 
-		{ok,Abstract}  -> 
-			lists:flatten(
-				[erl_syntax_lib:fold(
-					fun(Tree,Acc) -> 
-						%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
-			       		case Tree of 
-							{'case',Line,_,_} ->
-								[{Tree,"Case"}|Acc];
-							{'if',Line,_} ->
-								[{Tree,"If"}|Acc];
-							_ -> 
-								Acc
-			       		end
-				     end, [], Form) || Form<-smerl:get_forms(Abstract)]);
-		_ ->
-			[]
-	end.
-		     
+get_expression_from_abstract(File,Line,Type) ->
+	{ok,Abstract} = smerl:for_file(File),
+	lists:flatten(
+		[erl_syntax_lib:fold(
+			fun(Tree,Acc) -> 
+				%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
+	       		case Tree of 
+	       			{'var',Line,_} when Type == 'var' ->
+						[Tree|Acc];
+	       			{'integer',Line,_} when Type == 'literal' ->
+						[Tree|Acc];
+					{'float',Line,_} when Type == 'literal' ->
+						[Tree|Acc];
+					{'string',Line,_} when Type == 'literal' ->
+						[Tree|Acc];
+					{'atom',Line,_} when Type == 'literal' ->
+						[Tree|Acc];
+					{'call',Line,_,_} when Type == 'call' ->
+						[Tree|Acc];
+					{'op',Line,_,_,_} when Type == 'call' ->
+						[Tree|Acc];
+					{'op',Line,_,_} when Type == 'call' ->
+						[Tree|Acc];
+	       			{'cons',Line,_,_} when Type == 'cons' ->
+						[Tree|Acc];
+					{'tuple',Line,_} when Type == 'tuple' ->
+						[Tree|Acc];
+					{'match',Line,_,_}  when Type == 'match' ->
+						[Tree|Acc];
+					{'case',Line,_,_} when Type == 'case' ->
+						[{Tree,"case"}|Acc];
+					{'if',Line,_} when Type == 'case' ->
+						[{Tree,"if"}|Acc];
+					_ -> 
+						Acc
+	       		end
+		     end, [], Form) || Form<-smerl:get_forms(Abstract)]).
+
+
 get_try_from_abstract(File,Line,Type) -> 
 	{ok,Abstract} = smerl:for_file(File),
 	lists:flatten(
@@ -410,10 +421,64 @@ get_try_from_abstract(File,Line,Type) ->
 						Acc
 	       		end
 		     end, [], Form) || Form<-smerl:get_forms(Abstract)]).
+
+% get_match_from_abstract(File,Line) -> 
+% 	case smerl:for_file(File) of 
+% 		{ok,Abstract}  -> 
+% 			lists:flatten(
+% 				[erl_syntax_lib:fold(
+% 					fun(Tree,Acc) -> 
+% 						%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
+% 			       		case Tree of 
+% 							{'match',Line,_,_} ->
+% 								[Tree|Acc];
+% 							_ -> 
+% 								Acc
+% 			       		end
+% 				     end, [], Form) || Form<-smerl:get_forms(Abstract)]);
+% 		_ ->
+% 			[]
+% 	end.
+
+% get_case_from_abstract(File,Line) -> 
+% 	case smerl:for_file(File) of 
+% 		{ok,Abstract}  -> 
+% 			lists:flatten(
+% 				[erl_syntax_lib:fold(
+% 					fun(Tree,Acc) -> 
+% 						%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
+% 			       		case Tree of 
+% 							{'case',Line,_,_} ->
+% 								[{Tree,"Case"}|Acc];
+% 							{'if',Line,_} ->
+% 								[{Tree,"If"}|Acc];
+% 							_ -> 
+% 								Acc
+% 			       		end
+% 				     end, [], Form) || Form<-smerl:get_forms(Abstract)]);
+% 		_ ->
+% 			[]
+% 	end.
+		     
+
+
+% get_tuple_from_abstract(File,Line) -> 
+% 	{ok,Abstract} = smerl:for_file(File),
+% 	lists:flatten(
+% 		[erl_syntax_lib:fold(
+% 			fun(Tree,Acc) -> 
+% 				%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
+% 	       		case Tree of 
+% 					{'tuple',Line,_} ->
+% 						[Tree|Acc];
+% 					_ -> 
+% 						Acc
+% 	       		end
+% 		     end, [], Form) || Form<-smerl:get_forms(Abstract)]).
 	
 get_tree_case(Expr,Env,FreeV) -> 
 	Args = cerl:case_arg(Expr),
-	{ArgsValue,_,_} = get_tree(Args,Env,FreeV),
+	{ArgsValue,_,_,_} = get_tree(Args,Env,FreeV),
 	BArgs_ = bind_vars(ArgsValue,Env),
 	BArgs = 
 		case cerl:type(BArgs_) of
@@ -432,7 +497,7 @@ get_tree_case(Expr,Env,FreeV) ->
 	AbstractCase = 
 		case cerl:get_ann(Expr) of 
 			[Line,{file,FileName}] ->
-				case get_case_from_abstract(FileName,Line) of
+				case get_expression_from_abstract(FileName,Line,'case') of
 					[] ->
 						FunGetFromTry();
 					AbstractCase_ ->
@@ -476,7 +541,7 @@ get_tree_case(Expr,Env,FreeV) ->
 				ALet = 
 					case cerl:get_ann(Expr) of 
 						[Line_,{file,File_}] ->
-							get_match_from_abstract(File_,Line_);
+							get_expression_from_abstract(File_,Line_,'match');
 						_ ->
 							[]
 					end,
@@ -486,7 +551,14 @@ get_tree_case(Expr,Env,FreeV) ->
 				add_bindings_to_env(Bindings,Env),
 				{[],NFreeV_}
 		end,
-	{Value,NNFreeV,GraphsBody} = get_tree(ClauseBody,Env,NFreeV),
+	{Value,NNFreeV,GraphsBody,LastExprInfo} = get_tree(ClauseBody,Env,NFreeV),
+	ALastExpr = 
+		case LastExprInfo of 
+			[TypeLastExpr,LineLastExpr,FileLastExpr] ->
+				get_expression_from_abstract(FileLastExpr,LineLastExpr,TypeLastExpr);
+			[] -> 
+				[]
+		end,
 	{NNNFreeV, CaseGraphs} = 
 		case AbstractCase of 
 			[] -> 
@@ -518,7 +590,11 @@ get_tree_case(Expr,Env,FreeV) ->
 				end;
 			[_|_] -> 
 				G = digraph:new([acyclic]),
-				ConcreteBArg = hd([cerl:concrete(BArg) || BArg <- BArgs]),
+				ConcreteBArg = 
+					case BArgs of 
+						[] -> [];
+						_ -> hd([cerl:concrete(BArg) || BArg <- BArgs])
+					end,
 				case ClauseNumber =:= length(Clauses) of 
 					true -> 
 						digraph:add_vertex(G,NNFreeV,
@@ -527,9 +603,12 @@ get_tree_case(Expr,Env,FreeV) ->
 							 cerl:concrete(cerl:fold_literal(Value))},Deps});
 					false ->
 						digraph:add_vertex(G,NNFreeV,
-							{case_if,{hd(AbstractCase),
-							 ConcreteBArg,ClauseNumber,
-							 cerl:concrete(cerl:fold_literal(Value))},Deps})
+							{case_if,
+							 {hd(AbstractCase),
+							  ConcreteBArg,ClauseNumber,
+							  cerl:concrete(cerl:fold_literal(Value)),
+							  ALastExpr},
+							 Deps})
 				end,
 				[begin
 					digraph:add_vertex(G,NumNode,
@@ -552,7 +631,7 @@ get_tree_case(Expr,Env,FreeV) ->
 				{NNFreeV + 1, [G]}
 		end,
 	%io:format("AbstractCase: ~p\nCaseGraphs: ~p\n",[AbstractCase,CaseGraphs]),
-	{Value, NNNFreeV, GraphsBindings ++ CaseGraphs}.
+	{Value, NNNFreeV, GraphsBindings ++ CaseGraphs,LastExprInfo}.
 
 get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,FreeV,Deps,ClauseNumber) ->
 	NClause = cerl:c_clause(cerl:clause_pats(Clause), cerl:clause_body(Clause)),
@@ -587,7 +666,7 @@ get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,F
 					%{VarsPattern,ValuesPattern} = lists:unzip(Bindings),
 					add_bindings_to_env([ {Var, Value, [], null} || {Var,Value} <- Bindings],TempEnv),
 					%create_new_env(VarsPattern, [{VP,[],null} , TempEnv),
-					{GuardValue,FreeV,[]} = 
+					{GuardValue,FreeV,[],_} = 
 						get_tree(cerl:clause_guard(Clause),TempEnv,FreeV),
 					ets:delete(TempEnv),
 					%io:format("Bindings: ~p\nRemoving: ~p\n", [Bindings,remove_core_vars_from_env(Bindings)]),
@@ -693,7 +772,7 @@ get_tree_call(Call,Env0,FreeV) ->
 				end,
 			CValue = cerl:abstract(Value),
 			%io:format("AValue: ~p\n\n",[AValue]),
-			{CValue,FreeV,[]};
+			{CValue,FreeV,[],[]};
 	     _ -> 
 	        case {ModName,FunName} of
 	             {'erlang','is_function'} ->
@@ -714,7 +793,7 @@ get_tree_call(Call,Env0,FreeV) ->
     	                            _ -> {{c_literal,[],false},FreeV,[]}
     	                       end; 
 	                     _ ->
-	                       {{c_literal,[],false},FreeV,[]}
+	                       {{c_literal,[],false},FreeV,[],[]}
 	                end;
 	             _ ->
 	               	FileAdress = code:where_is_file(atom_to_list(ModName)++".erl"),
@@ -819,9 +898,20 @@ get_tree(Expr,Env,FreeV) ->
 	%io:format("Expr: ~p\n",[Expr]),
 	%io:format("Type: ~p\n",[cerl:type(Expr)]),
 	%io:format("Env: ~p\n",[ets:tab2list(Env)]),
+	%io:format("Ann: ~p\n",[cerl:get_ann(Expr)]),
+	LineFile =
+		case cerl:get_ann(Expr) of 
+			[_,Line_,{file,File_}] ->
+				 [Line_,File_];
+			[Line_,{file,File_}] ->
+				[Line_,File_];
+			[] ->
+				[]
+		end,
 	case cerl:type(Expr) of
 		'apply' ->
-			get_tree_apply(Expr,Env,FreeV);
+			{Value,NFreeV,Graph,_} = get_tree_apply(Expr,Env,FreeV),
+			{Value,NFreeV,Graph,['call'|LineFile]};
 		'case' ->
 			get_tree_case(Expr,Env,FreeV);
 		'let' ->
@@ -830,7 +920,7 @@ get_tree(Expr,Env,FreeV) ->
 			ALet = 
 				case cerl:get_ann(hd(Vars)) of 
 					[Line,{file,File}] ->
-						get_match_from_abstract(File,Line);
+						get_expression_from_abstract(File,Line,'match');
 					_ ->
 						[]
 				end,
@@ -838,7 +928,7 @@ get_tree(Expr,Env,FreeV) ->
 			% io:format("LetArg: ~p\nVars: ~p\n",
 			% 	[LetArg,cerl_trees:variables(LetArg)]),
 			%We ignore the graphs generated inside the delcaration of the variable
-			{ValueArg,_,_} = 
+			{ValueArg,_,_,_} = 
 		     	get_tree(LetArg,Env,FreeV),
 		    Deps = get_dependences(cerl_trees:variables(LetArg),Env),
 		    %io:format("Deps: ~p\n",[Deps]),
@@ -847,18 +937,18 @@ get_tree(Expr,Env,FreeV) ->
 			%{NGraphsArg,NNFreeV} = changeRepeatedIds(GraphsArg,NFreeV),
 			case check_errors(ValueArg) of
 			     true -> 
-			     	{ValueArg,NFreeV,GraphsArg};
+			     	{ValueArg,NFreeV,GraphsArg,[]};
 			     _ ->
 					LetBody = cerl:let_body(Expr),
-					{Value,NNFreeV,GraphBody} = 
+					{Value,NNFreeV,GraphBody,LastExprInfo} = 
 					    get_tree(LetBody,Env,NFreeV),
-					{Value,NNFreeV,GraphsArg ++ GraphBody} 
+					{Value,NNFreeV,GraphsArg ++ GraphBody,LastExprInfo} 
 			end;
 		'letrec' ->
 			%les definicions poden gastar variables declarades abans? Si es aixi hi hauria que tractaro
 			NewDefs_ = cerl:letrec_defs(Expr),
 			NewDefs = 
-				[begin {Value,_,_} = get_tree(FunDef,Env,FreeV), {VarName,Value} end 
+				[begin {Value,_,_,_} = get_tree(FunDef,Env,FreeV), {VarName,Value} end 
 				 || {VarName,FunDef} <- NewDefs_],
 			{core,Core} = hd(ets:lookup(Env,core)),
 			NCore =	cerl:c_module(cerl:module_name(Core), 
@@ -872,16 +962,18 @@ get_tree(Expr,Env,FreeV) ->
 		'call' ->
 			case Expr of
 			     {c_call,_,{c_literal,_,erlang},{c_literal,_,make_fun},_} ->
-			     	{Expr,FreeV,[]};
+			     	{Expr,FreeV,[],[]};
 			     _ -> 
-			     	get_tree_call(Expr,Env,FreeV)
+			     	{Value,NFreeV,Graph,_} = get_tree_call(Expr,Env,FreeV),
+			     	{Value,NFreeV,Graph,['call'|LineFile]}
 			end;
 		'fun' -> 
+			[Line,File] = LineFile,
 			FunName =
 				case cerl:get_ann(Expr) of 
-					[{id,{_,_,FunName_}},Line,{file,File}] ->
+					[{id,{_,_,FunName_}},_,_] ->
 						 FunName_;
-					[Line,{file,File}] ->
+					[_,_] ->
 						list_to_atom("let_rec_" ++ File ++ "_" ++ integer_to_list(Line))  
 				end,
 			%io:format("Previous expr: ~p\n",[Expr]),
@@ -894,18 +986,18 @@ get_tree(Expr,Env,FreeV) ->
 			%io:format("NExpr: ~p\n",[NExpr]),
 			% de la fun por sus valores
 			%io:format("New expr: ~p\n",[NExpr]),
-			{{anonymous_function,FunName,NExpr,File,Line,EnvFun},FreeV,[]};
+			{{anonymous_function,FunName,NExpr,File,Line,EnvFun},FreeV,[],['fun'|LineFile]};
 		'cons' ->
 			{[NHd,NTl],NFreeV,Graphs} = 
 				get_tree_list([cerl:cons_hd(Expr),cerl:cons_tl(Expr)],
 				            Env,FreeV),
-			{cerl:c_cons(NHd,NTl),NFreeV,Graphs};
+			{cerl:c_cons(NHd,NTl),NFreeV,Graphs,['cons'|LineFile]};
 		'tuple' ->
 			{NExps,NFreeV,Graphs} = 
 			    get_tree_list(cerl:tuple_es(Expr),Env,FreeV),
-			{cerl:c_tuple(NExps),NFreeV,Graphs};
+			{cerl:c_tuple(NExps),NFreeV,Graphs,['tuple'|LineFile]};
 		'try' ->
-			{ValueArg,NFreeV,GraphsArg} = 
+			{ValueArg,NFreeV,GraphsArg,_} = 
 			   get_tree(cerl:try_arg(Expr),Env,FreeV),
 			Deps = get_dependences(cerl_trees:variables(cerl:try_arg(Expr)),Env),
 			%io:format("Try-Value: ~p\n",[ValueArg]),
@@ -919,26 +1011,26 @@ get_tree(Expr,Env,FreeV) ->
 			     	case cerl:get_ann(Expr) of 
 						[Line,{file,FileName}] ->
 							%io:format("INSERTA\n"),
-							ets:insert(Env,{current_try,{FileName,Line,"Catch of try"}});
+							ets:insert(Env,{current_try,{FileName,Line,"catch of try"}});
 						[] ->
 							ok
 					end, 
-			     	{Value,NNFreeV,GraphsBody} = 
+			     	{Value,NNFreeV,GraphsBody,LastExprInfo} = 
 			     	    get_tree(cerl:try_handler(Expr),Env,NFreeV),
-			     	{Value,NNFreeV,GraphsArg ++ GraphsBody};
+			     	{Value,NNFreeV,GraphsArg ++ GraphsBody,LastExprInfo};
 			     _ ->
 			        lists:map(fun(Var) -> 
 			                    add_bindings_to_env([{Var,ValueArg,Deps,null}],Env) 
 			                  end,cerl:try_vars(Expr)),
 			       	case cerl:get_ann(Expr) of 
 						[Line,{file,FileName}] ->
-							ets:insert(Env,{current_try,{FileName,Line,"Try"}});
+							ets:insert(Env,{current_try,{FileName,Line,"try"}});
 						[] ->
 							ok
 					end, 
-			     	{Value,NNFreeV,GraphsBody} = 
+			     	{Value,NNFreeV,GraphsBody,LastExprInfo} = 
 			     	   get_tree(cerl:try_body(Expr),Env,NFreeV),
-			     	{Value,NNFreeV,GraphsArg ++ GraphsBody}
+			     	{Value,NNFreeV,GraphsArg ++ GraphsBody,LastExprInfo}
 			end;
 		'catch' ->
 		  % Genera la expresión azucar sintáctico equivalente y computa su árbol
@@ -976,7 +1068,7 @@ get_tree(Expr,Env,FreeV) ->
 %			   getTreeList(cerl:binary_segments(Expr),Env,G,Core,FreeV,EnvAF,Trusted),
 %			{cerl:c_binary(NExps),NFreeV,Roots};
 		'seq' ->
-		         {Value,NFreeV,Graphs} =
+		         {Value,NFreeV,Graphs,_} =
 		           get_tree(cerl:seq_arg(Expr),Env,FreeV),
 		         case check_errors(Value) of
 		              true -> 
@@ -985,11 +1077,11 @@ get_tree(Expr,Env,FreeV) ->
 		              	get_tree(cerl:seq_body(Expr),Env,FreeV)
 		         end;
 		'literal' ->
-			{Expr,FreeV,[]};
+			{Expr,FreeV,[],['literal'|LineFile]};
 		'var' -> 
-			{bind_vars(Expr,Env),FreeV,[]};
+			{bind_vars(Expr,Env),FreeV,[],['var'|LineFile]};
 		'values' -> 
-			{bind_vars(Expr,Env),FreeV,[]};
+			{bind_vars(Expr,Env),FreeV,[],[]};
 		'primop' ->
 		        {{c_literal,[],
 		          {error,cerl:concrete(cerl:primop_name(Expr)),
@@ -1000,7 +1092,7 @@ get_tree(Expr,Env,FreeV) ->
 		          || Arg <- cerl:primop_args(Expr)]}},
 		        FreeV,[]};
 		_ -> throw({error,"Non treated expression",Expr}),
-		     {Expr,FreeV,[]}	
+		     {Expr,FreeV,[],[]}	
 	end.
 
 
