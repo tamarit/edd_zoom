@@ -247,7 +247,7 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 	        u -> case State of
 	                  [] ->
 	                     io:format("Nothing to undo\n"),
-	                     {Vertices,Correct,NotCorrect,Unknown,State};
+	                     {Vertices,Correct,NotCorrect,Unknown,State,Strategy,PreSelected};
 	                  [{PVertices,PCorrect,PNotCorrect,PUnknown,PPreSelected}|PState] ->
 	                     {PVertices,PCorrect,PNotCorrect,PUnknown,PState,Strategy,PPreSelected}
 	             end;
