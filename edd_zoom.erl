@@ -46,11 +46,12 @@ zoom_graph(Expr)->
 	FunctionDef = 
 	    hd([FunctionDef_ || 
               	FunctionDef_ = {function,_,FunName_,Arity_,_} <- smerl:get_forms(M),
-		FunName_ =:= FunName, Arity_ =:= FunArity]),
+				FunName_ =:= FunName, Arity_ =:= FunArity]),
     ets:insert(Env,{initial_case,true}),
     ets:insert(Env,{function_definition, FunctionDef}),
     ets:insert(Env,{core,Core}),
 	{Value,FreeV,Graphs,LastExprInfo} = get_tree(InitialCall,Env,0), %{c_literal,[],1}
+	%io:format("LastExprInfo:~p\n",[LastExprInfo]),
 	ALastExpr = 
 		case LastExprInfo of 
 			[TypeLastExpr,Line,File] ->
@@ -58,6 +59,7 @@ zoom_graph(Expr)->
 			[] -> 
 				[]
 		end,
+	%io:format("ALastExpr:~p\n",[ALastExpr]),
 	
 
 	%io:format("Num. de grafos: ~p\n",[length(Graphs)]),
@@ -386,6 +388,8 @@ get_expression_from_abstract(File,Line,Type) ->
 						[Tree|Acc];
 					{'atom',Line,_} when Type == 'literal' ->
 						[Tree|Acc];
+					{'nil',Line} when Type == 'literal' ->
+						[Tree|Acc];
 					{'call',Line,_,_} when Type == 'call' ->
 						[Tree|Acc];
 					{'op',Line,_,_,_} when Type == 'call' ->
@@ -402,6 +406,8 @@ get_expression_from_abstract(File,Line,Type) ->
 						[{Tree,"case"}|Acc];
 					{'if',Line,_} when Type == 'case' ->
 						[{Tree,"if"}|Acc];
+					{'lc',Line,_,_} when Type == 'lc' ->
+						[Tree|Acc];
 					_ -> 
 						Acc
 	       		end
@@ -551,7 +557,9 @@ get_tree_case(Expr,Env,FreeV) ->
 				add_bindings_to_env(Bindings,Env),
 				{[],NFreeV_}
 		end,
+	%io:format("ClauseBody: ~p\n",[ClauseBody]),
 	{Value,NNFreeV,GraphsBody,LastExprInfo} = get_tree(ClauseBody,Env,NFreeV),
+	%io:format("Value: ~p\nLastExprInfo: ~p\n",[Value,LastExprInfo]),
 	ALastExpr = 
 		case LastExprInfo of 
 			[TypeLastExpr,LineLastExpr,FileLastExpr] ->
@@ -837,24 +845,29 @@ extract_module_from_ann([_,{file,File}]) ->
 
 get_tree_apply(Apply,Env0,FreeV)->
 	FunVar = cerl:apply_op(Apply),
-	%io:format("Apply: ~p\nFunVar: ~p\nModule: ~p\nEnv0: ~p\nTrusted: ~p\n",[Apply,FunVar,cerl:module_name(Core),ets:tab2list(Env0),Trusted]),
+	%io:format("Apply: ~p\nFunVar: ~p\n",[Apply,FunVar]),
 	Pars = cerl:apply_args(Apply),
 	NPars = lists:map(fun(Par) -> bind_vars(Par,Env0) end,Pars),
 	{core,Core} = hd(ets:lookup(Env0,core)),
 	FunDefs = cerl:module_defs(Core),
 	case FunVar of 
-		{anonymous_function,_,{c_fun,_,Args,FunBody},_,_,_} ->
-			get_tree_apply_fun(Args,NPars,FreeV,FunBody,[]);
+		{anonymous_function,_,{c_fun,_,Args,FunBody},_,_,EnvAFun} ->
+			get_tree_apply_fun(Args,NPars,FreeV,FunBody,EnvAFun);
 		_ -> 
 			case cerl:type(FunVar) of
 				'var' ->
+					%io:format("ENTRA: ~p\n",[FunDefs]),
 					case cerl:var_name(FunVar) of
 					     {FunName,_} ->
 							case [FunBody_ || {{c_var,_,FunName_},FunBody_} <- FunDefs, 
 							                  FunName_ == cerl:var_name(FunVar)] of
 							     [{c_fun,_,Args,FunBody}|_] -> % apply 'd'/1 (3)
-							     	get_tree_apply_fun(Args,NPars,FreeV,FunBody,[]);
-							     _ -> % Esta en otro modulo
+							     	get_tree_apply_fun(Args,NPars,FreeV,FunBody,[{core,Core}]);
+							     [{anonymous_function,_,{c_fun,_,Args,FunBody},_,_,EnvAFun}|_] -> %list comprehension
+							     	NEnvAFun = [{core,Core} | [Item || Item <- EnvAFun, element(1,Item) =/= 'core']], 
+				     				get_tree_apply_fun(Args,NPars,FreeV,FunBody,NEnvAFun);
+							     _ ->
+							     	% Esta en otro modulo
 							     	get_tree_call(
 							     	  cerl:ann_c_call(cerl:get_ann(Apply),
 							     	              {c_literal,[],extract_module_from_ann(cerl:get_ann(Apply))},
@@ -866,7 +879,7 @@ get_tree_apply(Apply,Env0,FreeV)->
 					     	     {anonymous_function,_,{c_fun,_,Args,FunBody},_,_,EnvAFun} -> % Se enlaza a una función anónima
 					     	        % {anonymous,{c_fun,_,Args,FunBody},_,_,_} = 
 					     	        %         get_anon_func(EnvAF,FunName,FunCore),
-						           get_tree_apply_fun(Args,NPars,FreeV,FunBody,ets:tab2list(EnvAFun));
+						           get_tree_apply_fun(Args,NPars,FreeV,FunBody,EnvAFun);
 					     	     _ -> % Caso de un make_fun
 							     	{ModName,FunName,_} = get_MFA(BFunVar),
 							     	get_tree_call({c_call,cerl:get_ann(Apply),
@@ -889,9 +902,9 @@ get_tree_apply_fun(Args,NPars,FreeV,FunBody,Env0) ->
 	%create_new_env(Args, NPars, Env),
 	%io:format("Env0: ~p\nEnv: ~p\n",[Env0,ets:tab2list(Env]),
 	add_bindings_to_env(Env0,Env),
-	Value = get_tree(FunBody,Env,FreeV),
+	{Value,NFreeV,_,FExpr} = get_tree(FunBody,Env,FreeV),
 	ets:delete(Env),
-	Value.
+	{Value,NFreeV,[],FExpr}.
 
 
 get_tree(Expr,Env,FreeV) ->
@@ -956,7 +969,8 @@ get_tree(Expr,Env,FreeV) ->
 					 	cerl:module_attrs(Core),
 					 	NewDefs ++ cerl:module_defs(Core)),
 			ets:insert(Env,{core,NCore}),
-			get_tree(cerl:letrec_body(Expr),Env,FreeV);
+			{Value,NFreeV,Graph,_} = get_tree(cerl:letrec_body(Expr),Env,FreeV),
+			{Value,NFreeV,Graph,['lc'|LineFile]};
 			% Genero un nuevo CORE de un módulo que es igual a 'Core' pero que tiene
 			% la función declarada en el letrec y genero el arbol del cuerpo del letrec
 		'call' ->
@@ -986,7 +1000,7 @@ get_tree(Expr,Env,FreeV) ->
 			%io:format("NExpr: ~p\n",[NExpr]),
 			% de la fun por sus valores
 			%io:format("New expr: ~p\n",[NExpr]),
-			{{anonymous_function,FunName,NExpr,File,Line,EnvFun},FreeV,[],['fun'|LineFile]};
+			{{anonymous_function,FunName,NExpr,File,Line,ets:tab2list(EnvFun)},FreeV,[],['fun'|LineFile]};
 		'cons' ->
 			{[NHd,NTl],NFreeV,Graphs} = 
 				get_tree_list([cerl:cons_hd(Expr),cerl:cons_tl(Expr)],
@@ -1077,6 +1091,7 @@ get_tree(Expr,Env,FreeV) ->
 		              	get_tree(cerl:seq_body(Expr),Env,FreeV)
 		         end;
 		'literal' ->
+			%io:format("Entra: ~p\n",[['literal'|LineFile]]),
 			{Expr,FreeV,[],['literal'|LineFile]};
 		'var' -> 
 			{bind_vars(Expr,Env),FreeV,[],['var'|LineFile]};
@@ -1091,8 +1106,8 @@ get_tree(Expr,Env,FreeV) ->
 		          	end
 		          || Arg <- cerl:primop_args(Expr)]}},
 		        FreeV,[]};
-		_ -> throw({error,"Non treated expression",Expr}),
-		     {Expr,FreeV,[],[]}	
+		_ -> throw({error,"Non treated expression",Expr})%,
+		     %{Expr,FreeV,[],[]}	
 	end.
 
 

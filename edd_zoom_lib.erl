@@ -270,7 +270,7 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 				       top_down ->
 							Children = digraph:out_neighbours(G, hd(NotCorrect)),
 							SelectableChildren = Children -- (Children -- Vertices), 
-							[{V, -length(digraph_utils:reachable([V], G))} 
+							[{V, - length(digraph_utils:reachable([V], G))} 
 							  || V <- SelectableChildren];
 				       divide_query ->
 							 [{V,begin
@@ -455,10 +455,16 @@ transform_label({'root',{_,FinalValue,AFinalExpr},_}) ->
 
 
 
-transform_value(AFun = {'fun',_,_}) ->
-	erl_prettypr:format(AFun);
+% transform_value(AFun = {'fun',_,_}) ->
+% 	erl_prettypr:format(AFun);
 transform_value(Value) ->
-	lists:flatten(io_lib:format("~p",[Value])).
+	try erl_syntax:type(Value) of 
+		_ ->
+			erl_prettypr:format(Value)
+	catch
+		_:_ ->
+			lists:flatten(io_lib:format("~p",[Value]))
+	end.
 
 transform_abstract(Abstract) ->
 	erl_prettypr:format(Abstract).
