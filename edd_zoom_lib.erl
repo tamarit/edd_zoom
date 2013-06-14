@@ -162,52 +162,7 @@ print_buggy_node(G,NotCorrectVertex,Message) ->
 	io:format("\n\n~s:\n~s\n",[Message,transform_label(InfoError)]).%,
 	%print_clause(G,NotCorrectVertex,Clause).
    
-% print_clause(G,NotCorrectVertex,Clause) ->
-% 	case get_MFA_Label(G,NotCorrectVertex) of
-% 		{'fun',_,{clauses,Clauses}} -> 
-% 			case Clause > length(Clauses)  of
-% 			     true -> 		     	
-% 			     	io:format("There is no clause matching.\n");
-% 			     false -> 
-% 			     	io:format("Please, revise the ~s clause:\n",[get_ordinal(Clause)]),
-% 					SelectedClause = lists:nth(Clause, Clauses),
-% 					ClauseStr = 
-% 				   		erl_prettypr:format({'fun',1,{clauses,[SelectedClause]}}),
-% 					io:format("~s\n",[ClauseStr])
-% 			end;
-% 		{ModName,FunName,Arity} ->
-% 			{ok,M} = smerl:for_file(atom_to_list(ModName) ++ ".erl"),
-% 			Clauses = hd([Clauses_ || 
-% 			              	{function,_,FunName_,Arity_,Clauses_} <- smerl:get_forms(M),
-% 					FunName_ =:= FunName, Arity_ =:= Arity]),
-% 			case Clause > length(Clauses)  of
-% 			     true -> 		     	
-% 			     	io:format("There is no clause matching.\n");
-% 			     false -> 
-% 			     	io:format("Please, revise the ~s clause:\n",[get_ordinal(Clause)]),
-% 					SelectedClause = lists:nth(Clause, Clauses),
-% 					ClauseStr = 
-% 				   		erl_prettypr:format({function,1,FunName,Arity,[SelectedClause]}),
-% 					io:format("~s\n",[ClauseStr])
-% 			end
-% 	end.
-% get_MFA_Label(G,Vertex) ->
-% 	{Vertex,{Label,_}} = digraph:vertex(G,Vertex),
-% 	FlattenLabel = lists:flatten(Label),
-% 	IsolatedLabel =
-% 		case string:str(FlattenLabel, ", with ") of 
-% 			0 -> FlattenLabel;
-% 			N -> string:sub_string(FlattenLabel, 1, N-1) 
-% 		end,
-% 	{ok,Toks,_} = erl_scan:string(IsolatedLabel++"."),
-% 	{ok,[Aexpr|_]} = erl_parse:parse_exprs(Toks),
-% 	case Aexpr of
-% 		{match,_,{call,_,{remote,_,{atom,_,ModName},{atom,_,FunName}},APars},_}  ->
-% 			Arity = length(APars),
-% 			{ModName,FunName,Arity};
-% 		{match,_,{call,_,AnoFun,_},_} -> 
-% 			AnoFun
-% 	end.
+
 	
 get_ordinal(1) -> "first";
 get_ordinal(2) -> "second";
@@ -218,43 +173,6 @@ get_ordinal(6) -> "sixth";
 get_ordinal(7) -> "seventh";
 get_ordinal(N) ->
 	integer_to_list(N)++"th".
-	
-% translate_string_to_functions("\n") ->
-% 	[];
-% translate_string_to_functions("") ->
-% 	[];
-% translate_string_to_functions(List0) ->
-% 	List = string:strip(List0),
-% 	case lists:splitwith(fun(C) -> C =/= $: end,List) of
-% 	     {ModName,[_|Tail1]} ->
-% 		case lists:splitwith(fun(C) -> C =/= $/ end,Tail1) of
-% 		     {FunName,[_|Tail2]} ->
-% 		     	case lists:splitwith(
-% 		     	      fun(C) -> 
-% 		     	         lists:member(C,[$0,$1,$2,$3,$4,$5,$6,$7,$8,$9]) 
-% 		     	      end,Tail2) of
-% 		     	     {FunArity,[_|Tail3]} ->
-% 		     	       	case FunArity of
-% 		     	       	     [] ->
-% 		     	       	       	io: format("The format is not correct\n"),
-% 	     				[];
-% 	     			     _ -> 
-% 	     			      [{list_to_atom(ModName),list_to_atom(FunName),
-% 				  	list_to_integer(string:strip(FunArity))} |
-% 	 			  	translate_string_to_functions(string:strip(Tail3))]
-% 		     	       	end;
-% 		     	     _ -> 
-% 		     	     	io: format("The format is not correct\n"),
-% 	     			[]
-% 		     	end;
-% 		     _ -> 
-% 		     	io: format("The format is not correct\n"),
-% 	     		[]
-% 		end;
-% 	     _ -> 
-% 	     	io: format("The format is not correct\n"),
-% 	     	[]
-% 	end.
 	
 
 
@@ -345,6 +263,7 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 	   end, 
 	asking_loop(G,NStrategy,NVertices,NCorrect,NNotCorrect,NUnknown,NState,NPreSelected).
 	
+%EN preguntes dobles tindre en conter el undo	
 ask_question(G,V)->
 	Options = "? [y/n/d/i/s/u/a]: ",
 	{V,Info} = digraph:vertex(G,V),
@@ -359,7 +278,13 @@ ask_question(G,V)->
 					Question2 = build_question({case_if,{Type,Value}}),
 					io:format("~s",[Question2]),
 					[_|Answer2]=lists:reverse(io:get_line(Options)),
-					list_to_atom(lists:reverse(Answer2));
+					AtomAnswer2 = list_to_atom(lists:reverse(Answer2)),
+					case AtomAnswer2 of
+						u  ->
+							ask_question(G,V);
+						_ ->
+							AtomAnswer2
+					end;
 				_ ->
 					AtomAnswer
 			end;

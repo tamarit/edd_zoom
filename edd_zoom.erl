@@ -26,7 +26,7 @@ zoom_graph(Expr)->
 					{ok,_,CoreP} = smerl:compile2(M2,[to_core,binary,no_copt]), 
 					CoreFun = extract_call(CoreP),
 					[{id,{_,_,FunName}},_,{file,File}] = cerl:get_ann(CoreFun),
-					{anonymous_function,FunName,CoreFun,File,Arg,ets:new(temp,[set])}
+					{anonymous_function,FunName,CoreFun,File,Arg,[]}
     			end
     	end
                 || Arg <- erl_syntax:application_arguments(AExpr)],
@@ -220,7 +220,9 @@ get_abstract_from_core_literal({c_literal,_,Lit_}) ->
 	ALit.
 	
 get_abstract_form({anonymous_function,_,_,File,Line,Env}) -> 
-	get_fun_from_file(File,Line,Env);
+	NEnv = ets:new(a_fun_temp,[set]),
+	ets:insert(NEnv,Env),
+	get_fun_from_file(File,Line,NEnv);
 get_abstract_form(Par_) -> 
 	Par = cerl:fold_literal(Par_),
 	case cerl:is_literal(Par) of
