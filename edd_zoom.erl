@@ -88,9 +88,6 @@ zoom_graph(Expr)->
 	%io:format("Env final:\n~p\n",[ets:tab2list(Env)]),
 	ets:delete(Env),
 	ok.
-	
-removeDuplicate(List) ->
-	gb_sets:to_list(gb_sets:from_list(List)).
 
 check_errors(Value) -> 
     %possiblement falten mes tipos d'errors.
@@ -213,7 +210,7 @@ get_dependences([Var | Vars], Env, Acc) ->
 		end,
 	get_dependences(Vars, Env, Acc ++ Deps);
 get_dependences([], _, Acc) ->
-	removeDuplicate(lists:flatten(Acc)).
+	lists:usort(lists:flatten(Acc)).
 
 get_abstract_from_core_literal({c_literal,_,Lit_}) ->
 	{ok,[ALit|_]} = edd_zoom_lib:parse_expr(lists:flatten(io_lib:format("~w",[Lit_])++".")),
@@ -543,6 +540,10 @@ get_tree_case(Expr,Env,FreeV) ->
 				false
 		end,
 	%io:format("Bindings: ~p\n", [Bindings]),
+	VarsBody = cerl_trees:variables(ClauseBody),
+	%io:format("VarsBody: ~p\n",[VarsBody]),
+	DepsBody = get_dependences(VarsBody,Env),
+	%io:format("DepsBody: ~p\n",[DepsBody]),
 	{GraphsBindings,NFreeV} =
 		case HasAbstractOrIsInitial of 
 			false ->
@@ -572,7 +573,6 @@ get_tree_case(Expr,Env,FreeV) ->
 	{NNNFreeV, CaseGraphs} = 
 		case AbstractCase of 
 			[] -> 
-				%io:format("Initial: ~p\n",[ets:lookup(Env,initial_case)]),
 				case IsInitial of 
 					true ->
 						{function_definition,FunctionDef} = 
@@ -593,7 +593,8 @@ get_tree_case(Expr,Env,FreeV) ->
 										ok
 								end,
 								G
-							 end || {NumNode,TotalNodes,CaseClause,_BindingsClause,SuccFail} <- GraphsClauses],
+							 end || {NumNode,TotalNodes,CaseClause,_BindingsClause,_GuardsDeps,SuccFail} <- GraphsClauses],
+
 						{NNFreeV, Gs ++ GraphsBody};
 					_ -> 
 						{NNFreeV, GraphsBody}
@@ -605,40 +606,54 @@ get_tree_case(Expr,Env,FreeV) ->
 						[] -> [];
 						_ -> hd([cerl:concrete(BArg) || BArg <- BArgs])
 					end,
-				case ClauseNumber =:= length(Clauses) of 
-					true -> 
-						digraph:add_vertex(G,NNFreeV,
-							{case_if_failed,{hd(AbstractCase),
-							 ConcreteBArg,
-							 cerl:concrete(cerl:fold_literal(Value))},Deps});
-					false ->
-						digraph:add_vertex(G,NNFreeV,
-							{case_if,
-							 {hd(AbstractCase),
-							  ConcreteBArg,ClauseNumber,
-							  cerl:concrete(cerl:fold_literal(Value)),
-							  ALastExpr},
-							 Deps})
-				end,
+				NNFreeV_ = 
+					case ClauseNumber =:= length(Clauses) of 
+						true -> 
+							digraph:add_vertex(G,NNFreeV,
+								{case_if_failed,{hd(AbstractCase),
+								 ConcreteBArg,
+								 cerl:concrete(cerl:fold_literal(Value))},Deps}),
+							NNFreeV;
+						false ->
+							GuardsDepsClauses = 
+								 lists:flatten([GuardsDeps || {_,_,_,_,GuardsDeps,_} <- GraphsClauses]),
+							InfoClausesCase = 
+								[{NumNode,TotalNodes,CaseClause,SuccFail}  || {NumNode,TotalNodes,CaseClause,_,_,SuccFail} <- GraphsClauses],
+							Info = 								
+							 	{case_if,
+								 {hd(AbstractCase),
+								  ConcreteBArg,
+								  ClauseNumber,
+								  cerl:concrete(cerl:fold_literal(Value)),
+								  ALastExpr,
+						      	  remove_core_vars_from_env([{BinVar, BinValue} || {BinVar, BinValue, _, _} <- Bindings]),
+						      	  InfoClausesCase
+						      	 },
+								 lists:usort(Deps ++ GuardsDepsClauses ++ DepsBody)},
+							digraph:add_vertex(G,NNFreeV,Info),
+							digraph:add_vertex(G,NNFreeV+1,Info),
+							digraph:add_edge(G,NNFreeV ,NNFreeV + 1), 
+							NNFreeV + 1
+					end,
 				[begin
 					digraph:add_vertex(G,NumNode,
 						{case_if_clause,{hd(AbstractCase),ConcreteBArg,
-						 CaseClause,pattern,SuccFail,BindingsClause},Deps}),
-					digraph:add_edge(G,NNFreeV,NumNode)	,
+						 CaseClause,pattern,SuccFail,BindingsClause,[]},Deps}),
+					digraph:add_edge(G,NNFreeV_,NumNode)	,
 					case TotalNodes of 
 						2 ->
 							digraph:add_vertex(G,NumNode + 1,
 								{case_if_clause,{hd(AbstractCase),ConcreteBArg,
-								 CaseClause,guard,SuccFail,BindingsClause},Deps}),
+								 CaseClause,guard,SuccFail,BindingsClause,GuardsDeps},Deps}),
 							digraph:add_edge(G,NumNode, NumNode + 1);
 						_ ->
 							ok
 					end
-				 end || {NumNode,TotalNodes,CaseClause,BindingsClause,SuccFail} <- GraphsClauses],
+				 end || {NumNode,TotalNodes,CaseClause,BindingsClause,GuardsDeps,SuccFail} <- GraphsClauses],
 				add_graphs_to_graph(G,GraphsBody),
-				[digraph:add_edge(G,NNFreeV,edd_zoom_lib:look_for_root(G_)) 
+				[digraph:add_edge(G,NNFreeV_,edd_zoom_lib:look_for_root(G_)) 
 				 	    || G_ <-  GraphsBody],
-				{NNFreeV + 1, [G]}
+				{NNFreeV_ + 1, [G]}
 		end,
 	%io:format("AbstractCase: ~p\nCaseGraphs: ~p\n",[AbstractCase,CaseGraphs]),
 	{Value, NNNFreeV, GraphsBindings ++ CaseGraphs,LastExprInfo}.
@@ -646,7 +661,7 @@ get_tree_case(Expr,Env,FreeV) ->
 get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,FreeV,Deps,ClauseNumber) ->
 	NClause = cerl:c_clause(cerl:clause_pats(Clause), cerl:clause_body(Clause)),
 	FunCreateFailedNode = 
-		fun(Type,Bindings) ->
+		fun(Type,Bindings,DepsGuard) ->
 			{NFreeV, GraphFailed} = 
 				case HasAbstractOrIsInitial of
 					false ->
@@ -654,9 +669,9 @@ get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,F
 				    true ->
 				      case Type of 
 				      	guard -> 
-				      		{FreeV + 2,[{FreeV,2,ClauseNumber,Bindings,failed}]};
+				      		{FreeV + 2,[{FreeV,2,ClauseNumber,Bindings,DepsGuard,failed}]};
 				      	pattern -> 
-				      		{FreeV + 1,[{FreeV,1,ClauseNumber,Bindings,failed}]}
+				      		{FreeV + 1,[{FreeV,1,ClauseNumber,Bindings,[],failed}]}
 				      end
 				  end,
 	       	{SelectedClause,NClauseBody,NBindings,NNFreeV,Graphs} =
@@ -678,6 +693,13 @@ get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,F
 					%create_new_env(VarsPattern, [{VP,[],null} , TempEnv),
 					{GuardValue,FreeV,[],_} = 
 						get_tree(cerl:clause_guard(Clause),TempEnv,FreeV),
+					DepsGuard_ = 
+					 	try get_dependences(cerl_trees:variables(cerl:clause_guard(Clause)),TempEnv) 
+						catch _:_ -> []
+						end,
+					VarsBindings = [cerl:var_name(Var) || {Var,_} <- Bindings],
+					DepsGuard = [Entry || Entry = {Var,{_,_}} <- DepsGuard_, not(lists:member(Var,VarsBindings))],
+					%io:format("VarsBindings: ~p\nDepsGuard_: ~p\nDepsGuard: ~p\n",[VarsBindings,DepsGuard_,DepsGuard]),
 					ets:delete(TempEnv),
 					%io:format("Bindings: ~p\nRemoving: ~p\n", [Bindings,remove_core_vars_from_env(Bindings)]),
 					case cerl:concrete(GuardValue) of
@@ -689,10 +711,10 @@ get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,F
 					      	   			case cerl:clause_guard(Clause) of 
 					      	   				{c_literal,[],true} ->
 							      	   			{FreeV + 1,
-							      	   			 [{FreeV,1,ClauseNumber,remove_core_vars_from_env(Bindings),succeed}]};
+							      	   			 [{FreeV,1,ClauseNumber,remove_core_vars_from_env(Bindings),[],succeed}]};
 							      	   		_ ->
 							      	   			{FreeV + 2,
-							      	   			 [{FreeV,2,ClauseNumber,remove_core_vars_from_env(Bindings),succeed}]}
+							      	   			 [{FreeV,2,ClauseNumber,remove_core_vars_from_env(Bindings),DepsGuard,succeed}]}
 							      	   	end;
 					      	        false ->
 					      	          	{FreeV,[]}
@@ -709,13 +731,13 @@ get_clause_body([Clause | Clauses],AllClauses,HasAbstractOrIsInitial,BArgs,Env,F
 					      	 [{BinVar, BinValue, Deps, Node} || {BinVar, BinValue} <- Bindings],
 					     	{ClauseNumber,ClauseBody,NBindings,NFreeV,GraphGuardSucceeds};
 					     false ->
-					      	FunCreateFailedNode(guard,remove_core_vars_from_env(Bindings))
+					      	FunCreateFailedNode(guard,remove_core_vars_from_env(Bindings),DepsGuard)
 					end;
 				_ -> 
-				 	FunCreateFailedNode(pattern,[])
+				 	FunCreateFailedNode(pattern,[],[])
 			end;
 		_ -> 
-			FunCreateFailedNode(pattern,[])
+			FunCreateFailedNode(pattern,[],[])
 	end;
 get_clause_body([],_,_,_,_,_,_,_) -> 
 	throw({error,"Non matching clause exists"}).
@@ -942,22 +964,57 @@ get_tree(Expr,Env,FreeV) ->
 			%io:format("ALet: ~p\n",[ALet]),
 			% io:format("LetArg: ~p\nVars: ~p\n",
 			% 	[LetArg,cerl_trees:variables(LetArg)]),
-			%We ignore the graphs generated inside the delcaration of the variable
-			{ValueArg,_,_,_} = 
+
+			{ValueArg,NFreeV_,GraphsArgRight,_} = 
 		     	get_tree(LetArg,Env,FreeV),
 		    Deps = get_dependences(cerl_trees:variables(LetArg),Env),
+
 		    %io:format("Deps: ~p\n",[Deps]),
+
 		    {GraphsArg,NFreeV} = 
-		    	build_graphs_and_add_bindings(Vars,Env,FreeV,ValueArg,Deps,ALet,[]),
-			%{NGraphsArg,NNFreeV} = changeRepeatedIds(GraphsArg,NFreeV),
+		    	build_graphs_and_add_bindings(Vars,Env,NFreeV_,ValueArg,Deps,ALet,[]),
+		    
+		    FunCreateNGraphsArg = 
+		    	fun() ->
+				    case GraphsArg of 
+				    	[] -> 
+				    		ets:insert(Env,{let_graphs,{cerl:var_name(hd(Vars)),GraphsArgRight}}),
+				    		[];
+				    	_ ->
+				    		NG = digraph:new([acyclic]),
+							add_graphs_to_graph(NG,GraphsArg),
+							add_graphs_to_graph(NG,GraphsArgRight),
+				    		[digraph:add_edge(NG,NFreeV_,edd_zoom_lib:look_for_root(G_)) || G_ <- GraphsArgRight],
+				    		[NG]
+			    	end
+			    end,
+		    NGraphsArg =
+			    case cerl:type(LetArg) of 
+			    	'var' -> 
+			    		VarLetArg = cerl:var_name(LetArg),
+			    		ResLookUp = ets:lookup(Env,let_graphs),
+			    		ets:delete(Env,let_graphs),
+			    		case ResLookUp of 
+			    			[{let_graphs,{VarLetArg,StoredGraphs}}] -> 
+			    				NG = digraph:new([acyclic]),
+								add_graphs_to_graph(NG,GraphsArg),
+								add_graphs_to_graph(NG,StoredGraphs),
+					    		[digraph:add_edge(NG,NFreeV_,edd_zoom_lib:look_for_root(G_)) || G_ <- StoredGraphs],
+					    		[NG];
+					    	_ -> 
+					    		FunCreateNGraphsArg()
+					    end;
+					_ ->
+						FunCreateNGraphsArg()
+				end,
 			case check_errors(ValueArg) of
 			     true -> 
-			     	{ValueArg,NFreeV,GraphsArg,[]};
+			     	{ValueArg,NFreeV,NGraphsArg,[]};
 			     _ ->
 					LetBody = cerl:let_body(Expr),
 					{Value,NNFreeV,GraphBody,LastExprInfo} = 
 					    get_tree(LetBody,Env,NFreeV),
-					{Value,NNFreeV,GraphsArg ++ GraphBody,LastExprInfo} 
+					{Value,NNFreeV,NGraphsArg ++ GraphBody,LastExprInfo} 
 			end;
 		'letrec' ->
 			%les definicions poden gastar variables declarades abans? Si es aixi hi hauria que tractaro
@@ -1027,7 +1084,7 @@ get_tree(Expr,Env,FreeV) ->
 			     	case cerl:get_ann(Expr) of 
 						[Line,{file,FileName}] ->
 							%io:format("INSERTA\n"),
-							ets:insert(Env,{current_try,{FileName,Line,"catch of try"}});
+							ets:insert(Env,{current_try,{FileName,Line,catch_of_try}});
 						[] ->
 							ok
 					end, 
@@ -1040,7 +1097,7 @@ get_tree(Expr,Env,FreeV) ->
 			                  end,cerl:try_vars(Expr)),
 			       	case cerl:get_ann(Expr) of 
 						[Line,{file,FileName}] ->
-							ets:insert(Env,{current_try,{FileName,Line,"try"}});
+							ets:insert(Env,{current_try,{FileName,Line,'try'}});
 						[] ->
 							ok
 					end, 
@@ -1088,7 +1145,7 @@ get_tree(Expr,Env,FreeV) ->
 		           get_tree(cerl:seq_arg(Expr),Env,FreeV),
 		         case check_errors(Value) of
 		              true -> 
-		              	{Value,NFreeV,Graphs};
+		              	{Value,NFreeV,Graphs,[]};
 		              _ ->
 		              	get_tree(cerl:seq_body(Expr),Env,FreeV)
 		         end;

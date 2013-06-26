@@ -108,15 +108,15 @@ ask_about(G,Strategy,Vertices,Correct0,NotCorrect0) ->
 					     	ask_about(G,NStrategy,Maybe,Correct,NotCorrect);
 					     n -> 
 			               [print_buggy_node(G,V,
-			                "This piece of code could contain an error") 
+			                "This could be a reasons for an error") 
 			                || V <- NotCorrectWithUnwnownVertexs],
 			               [print_buggy_node(G,V,
-			                 "This piece of code has not been answered and could contain an error") 
+			                 "This could be a reason for an error if an unanswered question were answered with no") 
 					                || V <- Maybe]
 					end;
 	             [NotCorrectVertex|_] ->
 	               	print_buggy_node(G,NotCorrectVertex,
-	               	 "Piece of code that contains an error")
+	               	 "This is the reason for the error")
 	        end
 	end,
 	ok.
@@ -159,8 +159,73 @@ find_unknown_children(_,_,[]) ->
 print_buggy_node(G,NotCorrectVertex,Message) ->
 	{NotCorrectVertex,InfoError} = 
 		digraph:vertex(G,NotCorrectVertex),
-	io:format("\n\n~s:\n~s\n",[Message,transform_label(InfoError)]).%,
-	%print_clause(G,NotCorrectVertex,Clause).
+	NInfoError = 
+		case InfoError of 
+			{case_if,CaseInfo,CaseDeps} ->
+				[Parent] = digraph:in_neighbours(G, NotCorrectVertex),
+				{Parent,ParentInfo} = digraph:vertex(G,Parent),
+				case ParentInfo of 
+					InfoError -> {case_if_2,CaseInfo,CaseDeps};
+					_ -> InfoError
+				end;
+			_ ->
+				InfoError
+		end,
+	io:format("\n\n~s:\n~s\n",[Message,print_buggy_info(NInfoError)]).
+
+
+print_buggy_info({'let',{VarName,Value,ALetArg},_}) -> 
+	"Variable " ++ atom_to_list(VarName) ++ " is badly assigned " ++ transform_value(Value) ++
+	case ALetArg of 
+		[] ->
+			".";
+		[ALetArg_|_] ->
+			" in the expression:\n" ++ transform_abstract(ALetArg_) ++ " (Line " 
+     		++ integer_to_list(element(2,ALetArg_)) ++ ")."
+	end;
+print_buggy_info({'let_multiple',{InfoVars,ALetArg},_}) -> 
+	"The following variables are badly asigned:\n"++get_context(InfoVars)++
+	case ALetArg of 
+		[] ->
+			".";
+		[ALetArg_|_] ->
+			"\nin the expression:\n" ++ transform_abstract(ALetArg_) ++ " (Line " 
+     		++ integer_to_list(element(2,ALetArg_)) ++ ")."
+	end;
+print_buggy_info({case_if,{{ACase,Type},_,_,_,_,_,_},_}) ->
+    "Argument value of the " ++ Type ++ " exprressiom:\n" ++
+    transform_abstract(ACase) ++ 
+    "\nis not correct.";
+print_buggy_info({case_if_2,{_,_,_,FinalValue,AFinalExpr,_,_},_}) ->
+     final_expression_message(FinalValue,AFinalExpr);
+print_buggy_info({case_if_failed,{{ACase,Type},ArgValue,_},_}) ->
+	"The " ++ Type ++ " expression:\n" ++ transform_abstract(ACase) ++
+    case ArgValue of
+		[] ->
+			"";
+		_ ->
+			"\nits argument value " ++ transform_value(ArgValue) ++ " is not correct."
+	end;
+print_buggy_info({case_if_clause,{{ACase,Type}, _, ClauseNumber,PatGuard,_,_,_}, _}) ->
+	"The " ++ atom_to_list(PatGuard) ++ " of the " ++
+	get_ordinal(ClauseNumber) ++ " clause of " ++
+	Type ++ " expression:\n" ++ transform_abstract(only_one_case_clause(ACase,ClauseNumber));
+print_buggy_info({fun_clause,{FunDef,ClauseNumber,PatGuard,_},[]}) ->
+	"The " ++ atom_to_list(PatGuard) ++ " of the " ++
+	get_ordinal(ClauseNumber) ++ " clause of " ++
+	" function definition:\n" ++ transform_abstract(only_one_case_clause(FunDef,ClauseNumber));
+print_buggy_info({'root',{_,FinalValue,AFinalExpr},_}) -> 
+	final_expression_message(FinalValue,AFinalExpr).
+
+
+final_expression_message(FinalValue,AFinalExpr) ->
+	"Value " ++ transform_value(FinalValue) ++ " for the final expression " ++
+    case AFinalExpr of 
+     	[] -> "";
+     	[AFinalExpr_|_] -> 
+     		transform_abstract(AFinalExpr_) ++ " (Line " 
+     			++ integer_to_list(element(2,AFinalExpr_)) ++ ")"
+    end ++ " is not correct.".
    
 
 	
@@ -173,6 +238,17 @@ get_ordinal(6) -> "sixth";
 get_ordinal(7) -> "seventh";
 get_ordinal(N) ->
 	integer_to_list(N)++"th".
+
+get_both_case_nodes(G,Selected,Info) ->
+	[Parent] = digraph:in_neighbours(G, Selected),
+	[Children|_] = digraph:out_neighbours(G, Selected),
+	{Parent,ParentInfo} = digraph:vertex(G,Parent),
+	case ParentInfo of 
+		Info -> 
+			[Selected,Parent];
+		_ -> 
+			[Children,Selected]
+	end.
 	
 
 
@@ -180,12 +256,17 @@ asking_loop(_,Strategy,[],Correct,NotCorrect,Unknown,State,_) ->
 	{Correct,NotCorrect,Unknown,State,Strategy};
 asking_loop(_,Strategy,[-1],_,_,_,_,_) -> {[-1],[-1],[-1],[],Strategy};
 asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
+	%io:format("Selectable: ~w\n",[lists:sort(Vertices)]),
+	%io:format("Correct: ~w\n",[lists:sort(Correct)]),
+	%io:format("NotCorrect: ~w\n",[lists:sort(NotCorrect)]),
+	%io:format("Unknown: ~w\n",[lists:sort(Unknown)]),
 	{Selected,NSortedVertices} = 
 		case PreSelected of
 			-1 ->
 				VerticesWithValues = 
 				  case Strategy of 
 				       top_down ->
+				       		%io:format("Inicio: ~p\n",[hd(NotCorrect)]),
 							Children = digraph:out_neighbours(G, hd(NotCorrect)),
 							SelectableChildren = Children -- (Children -- Vertices), 
 							[{V, - length(digraph_utils:reachable([V], G))} 
@@ -200,10 +281,13 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 				  end,				
 				SortedVertices = lists:keysort(2,VerticesWithValues),
 				Selected_ = element(1,hd(SortedVertices)),
-				NSortedVertices_ = [V || {V,_} <- tl(SortedVertices)],
-				{Selected_,NSortedVertices_};
+				NSortedVertices_ = 
+					lists:flatten(
+						[digraph_utils:reachable([V], G) || {V,_} <- tl(SortedVertices)]) 
+					-- (Correct ++ NotCorrect ++ Unknown),
+				{Selected_, NSortedVertices_};
 			_ ->
-				{PreSelected,Vertices--[PreSelected]}
+				{PreSelected, Vertices -- [PreSelected]}
 		end,
 	YesAnswer = %begin
 	             % EqualToSeleceted = 
@@ -215,7 +299,8 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 	             [Selected|Correct],NotCorrect,Unknown,
 	             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1},
 	            %end, 
-	Answer = ask_question(G,Selected),
+	CurrentState = {Vertices,Correct,NotCorrect,Unknown,State,Strategy,PreSelected},
+	{Answer,StateQuestion} = ask_question(G,Selected,CurrentState,NSortedVertices),
 	{NVertices,NCorrect,NNotCorrect,NUnknown,NState,NStrategy,NPreSelected} = 
 	   case Answer of
 	        y -> YesAnswer;
@@ -247,7 +332,7 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 	        u -> case State of
 	                  [] ->
 	                     io:format("Nothing to undo\n"),
-	                     {Vertices,Correct,NotCorrect,Unknown,State,Strategy,PreSelected};
+	                     CurrentState;
 	                  [{PVertices,PCorrect,PNotCorrect,PUnknown,PPreSelected}|PState] ->
 	                     {PVertices,PCorrect,PNotCorrect,PUnknown,PState,Strategy,PPreSelected}
 	             end;
@@ -259,100 +344,292 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 	                     {Vertices,Correct,NotCorrect,Unknown,State,divide_query,PreSelected}
 	             end;
 	        a -> {[-1],Correct,NotCorrect,Unknown,State,Strategy,-1};
-	        _ -> {Vertices,Correct,NotCorrect,Unknown,State,Strategy,PreSelected}
+	        c -> StateQuestion;
+	        _ -> CurrentState
 	   end, 
 	asking_loop(G,NStrategy,NVertices,NCorrect,NNotCorrect,NUnknown,NState,NPreSelected).
+
 	
 %EN preguntes dobles tindre en conter el undo	
-ask_question(G,V)->
-	Options = "? [y/n/d/i/s/u/a]: ",
-	{V,Info} = digraph:vertex(G,V),
-	Question = build_question(Info),
-	io:format("~s",[Question]),
-	[_|Answer]=lists:reverse(io:get_line(Options)),
-	AtomAnswer = list_to_atom(lists:reverse(Answer)),
+ask_question(G,Selected,CurrentState,NSortedVertices)->
+	{Selected,Info} = digraph:vertex(G,Selected),
 	case Info of 
-		{case_if,{{_,Type},_,_,Value,_},_} ->
-			case AtomAnswer of 
-				y ->
-					Question2 = build_question({case_if,{Type,Value}}),
-					io:format("~s",[Question2]),
-					[_|Answer2]=lists:reverse(io:get_line(Options)),
-					AtomAnswer2 = list_to_atom(lists:reverse(Answer2)),
-					case AtomAnswer2 of
-						u  ->
-							ask_question(G,V);
-						_ ->
-							AtomAnswer2
-					end;
-				_ ->
-					AtomAnswer
-			end;
+		{case_if_clause,{_, _, _,pattern,_,_,_}, _} ->
+			{Vertices,Correct,NotCorrect,Unknown,State,Strategy,PreSelected} = CurrentState,
+			[Parent] = digraph:in_neighbours(G, Selected),
+			NState = 
+				{NSortedVertices,Correct,NotCorrect,Unknown,
+	             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,Parent},
+			{c,NState};
+		{case_if_clause,{_, _, _,guard,_,_,_}, _} ->
+			{Vertices,Correct,NotCorrect,Unknown,State,Strategy,PreSelected} = CurrentState,
+			[Parent] = digraph:in_neighbours(G, Selected),
+			case lists:member(Parent,Correct++NotCorrect++Unknown) of 
+				true ->
+					{Question,_} = build_question(Info),
+					io:format("~s",[Question]),
+					Options = "? [y/n/d/s/u/a]: ",
+					[_|Answer] = lists:reverse(io:get_line(Options)),
+					{list_to_atom(lists:reverse(Answer)),[]};
+				false ->
+					{c,{NSortedVertices,Correct,NotCorrect,Unknown,
+		             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,Parent}}
+	        end;
 		_ ->
-			AtomAnswer
+			{Question,AnswerProblemEts} = build_question(Info),
+			io:format("~s",[Question]),
+			case AnswerProblemEts of 
+				[] -> 
+					Options = "? [y/n/d/i/s/u/a]: ",
+					[_|Answer] = lists:reverse(io:get_line(Options)),
+					{list_to_atom(lists:reverse(Answer)),[]};
+				_ -> 
+					AnswerProblem = ets:tab2list(AnswerProblemEts),
+					QuestionCase = "[" ++ [integer_to_list(AnswerNum)++"/"
+						 || {AnswerNum,_} <-  lists:sort(AnswerProblem)]++"d/s/u/a]? ",
+					Answer =
+					 get_answer(QuestionCase,
+						[list_to_atom(integer_to_list(AnswerNum))
+						 || {AnswerNum,_} <-  AnswerProblem]++[d,s,u,a]),
+					case Answer of 
+						s -> {s,[]};
+						u -> {u,[]};
+						a -> {a,[]};
+						d -> {d,[]}; %Could/Should be improved
+						_ -> 
+							{_, Problem} = 
+								hd(ets:lookup(AnswerProblemEts,list_to_integer(atom_to_list(Answer)))),
+							ets:delete(AnswerProblemEts),
+							{Vertices,Correct,NotCorrect,Unknown,State,Strategy,PreSelected} = CurrentState,
+							NState = 
+								case Problem of 
+									context -> 
+										{case_if,_,DepsSelected} = Info,
+							        	case DepsSelected of 
+							        		[{_,{_,NextQuestion}}] ->
+							        			{NSortedVertices -- digraph_utils:reachable([Selected],G),
+									             [Selected|Correct],NotCorrect,Unknown,
+									             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,NextQuestion};
+							        		_ -> 
+							        			NextQuestion = ask_question_dependeces(DepsSelected),
+							        			%Podria passar que estaguera entre els correct, notcorret o unknown?
+							        			{NSortedVertices -- digraph_utils:reachable([Selected],G),
+									             [Selected|Correct],NotCorrect,Unknown,
+									             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,NextQuestion}
+							        	end;
+							        arg_value -> 
+										[Parent] = digraph:in_neighbours(G, Selected),
+										{Parent,ParentInfo} = digraph:vertex(G,Parent),
+										WrongVertex = 
+											case ParentInfo of 
+												Info -> Parent;
+												_ -> Selected
+											end,
+					        			{[],digraph_utils:reachable([WrongVertex],G) ++ Correct,[WrongVertex|NotCorrect],Unknown,
+							             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
+							        clause -> 
+							        	%Quant sols te una clausula no te sentit preguntar-li res.
+							        	{case_if,{{ACase,Type},_,CurrentClause,_,_,_,InfoClauses},_} = Info,
+							        	TotalClauses = 
+								        	length(
+								        		case element(1,ACase) of 
+									        		'case' ->
+									        			element(4,ACase);
+									        		'if' ->
+									        			element(3,ACase);
+									        		'try' ->
+									        			case Type of 
+									        				'try' ->
+									        					element(4,ACase);
+									        				_ ->
+									        					element(5,ACase)
+									        			end;
+									        		_ ->
+									        			[]
+									        	end),
+								       	QuestionClauses = "[" ++ [integer_to_list(AnswerNum)++"/"
+											 || AnswerNum <-  lists:seq(1, TotalClauses)]++"u/a]? ",
+										AnswerClauses =
+										 get_answer("Which clauses di you expect to be selected " ++ QuestionClauses,
+											[list_to_atom(integer_to_list(AnswerNum))
+											 || AnswerNum <-  lists:seq(1, TotalClauses)]++[u,a]),
+										case AnswerClauses of 
+											u ->
+												CurrentState;
+											a -> 
+												{a,[]};
+											_ ->
+												WrongVertexs = get_both_case_nodes(G, Selected,Info),
+												ExpectedClause = list_to_integer(atom_to_list(AnswerClauses)),
+												%io:format("ExpectedClause: ~p\nCurrentClause: ~p\n",[ExpectedClause,CurrentClause]),
+												FunGetStateClauses = 
+													fun(ConsideredClause) -> 
+														CorrectClauses =
+															lists:flatten( 
+																[case NumNodes of 
+																 	1 -> 
+																 		[IdClause];
+																 	_ -> 
+																 		[IdClause, IdClause + 1]
+																 end
+																 || {IdClause,NumNodes,NumClause,_} <- InfoClauses, 
+																 	NumClause =/= ConsideredClause]),
+														{NotCorretClause,NextQuestion} = 
+															case [{IdClause,NumNodes} || 
+																	{IdClause,NumNodes,NumClause,_} <- InfoClauses, 
+																	NumClause =:= ConsideredClause] of
+																[{IdClause_,1}] ->
+																	{[IdClause_],-1};
+																[{IdClause_,2}] ->
+																	{[IdClause_],IdClause_ + 1};
+																_ -> 
+																	{[],-1}
+															end,
+														{case NextQuestion of 
+															-1 -> 
+																[];
+															_ -> 
+																[NextQuestion]
+														 end,
+									             		Correct ++ CorrectClauses, NotCorretClause ++ WrongVertexs ++ NotCorrect,Unknown,
+									             		[{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,NextQuestion}
+													end,
+												if 	ExpectedClause < CurrentClause ->
+														FunGetStateClauses(ExpectedClause);
+													ExpectedClause > CurrentClause ->
+														FunGetStateClauses(CurrentClause);
+													ExpectedClause =:= CurrentClause ->
+														CurrentState
+												end
+										end;
+									bindings ->
+										{case_if,{_,_,CurrentClause,_,_,_,InfoClauses},_} = Info,
+										[IdClauseSucceed] = 
+											[IdClause || {IdClause,_,NumClause,_} <- InfoClauses,NumClause =:= CurrentClause],
+										WrongVertexs = get_both_case_nodes(G, Selected,Info),
+										{[],Correct ++ digraph:out_neighbours([IdClauseSucceed]), [IdClauseSucceed | WrongVertexs ++ NotCorrect],Unknown,
+					             		[{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
+					             	value ->
+										[Children|_] = digraph:out_neighbours(G, Selected),
+										{Children,ChildrenInfo} = digraph:vertex(G,Children),
+										{case_if,{_,_,_,_,_,_,InfoClauses},_} = Info,
+										CorrectClauses = 
+											[IdClause || {IdClause,_,_,_} <- InfoClauses] 
+											++ [IdClause + 1 || {IdClause,2,_,_} <- InfoClauses],
+										WrongVertexs = 
+											case ChildrenInfo of 
+												Info -> [Children, Selected];
+												_ -> [Selected]
+											end,
+					        			{digraph_utils:reachable([hd(WrongVertexs)], G) -- CorrectClauses,
+					        			 CorrectClauses ++ Correct,WrongVertexs ++ NotCorrect,Unknown,
+							             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
+							        nothing ->
+										{NSortedVertices -- [Selected],[Selected|Correct],NotCorrect,Unknown,
+							             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1}
+								end,
+							case NState of 
+								{_,_} -> NState;						
+								_ -> {c,NState}
+							end
+					end
+			end
 	end.
 
-build_question({case_if,{Type,Value}}) ->
-	"The final value of the " ++ Type 
-	++ " expression is " ++ transform_value(Value);
-build_question({case_if,{{ACase,Type},ArgValue,ClauseNumber,_,_},Deps}) ->
-	Label1 = 
+
+	% case Info of 
+	% 	{case_if,{ACaseIf,_,_,Value,_,Bindings},_} ->
+	% 		case AtomAnswer of 
+	% 			y ->
+	% 				Question2 = build_question({case_if_2,{ACaseIf,Value,Bindings}}),
+	% 				io:format("~s",[Question2]),
+	% 				[_|Answer2]=lists:reverse(io:get_line(Options)),
+	% 				AtomAnswer2 = list_to_atom(lists:reverse(Answer2)),
+	% 				case AtomAnswer2 of
+	% 					u  ->
+	% 						ask_question(G,V);
+	% 					_ ->
+	% 						AtomAnswer2
+	% 				end;
+	% 			_ ->
+	% 				AtomAnswer
+	% 		end;
+	% 	_ ->
+	% 		AtomAnswer
+	% end.
+
+build_question({case_if,{{ACase,Type},ArgValue,ClauseNumber,FinalValue,_,Bindings,_},Deps}) ->
+	Label1 = "For the " ++ Type ++ " expression:\n" 
+		++ transform_abstract(ACase)++
+		"\nIs there anything incorret?\n",
+	CurrentNumber = 1,
+	AnswerProblem = ets:new(env_answerproblem,[set]),
+	{CurrentNumber2,Label2} = 
 		case Deps of 
-			[] ->
-				"";
+			[] -> 
+				{CurrentNumber,""};
 			_ ->
-				" the context " ++ get_context(Deps) ++ "\n"
+				ets:insert(AnswerProblem, {CurrentNumber,context}),
+				{CurrentNumber + 1,
+				 integer_to_list(CurrentNumber) ++ ".- The context:\n" 
+				 ++ get_context(Deps) ++ "\n"}
 		end,
-	Label2 = 
+	{CurrentNumber3,Label3} = 
 		case ArgValue of 
 			[] -> 
-				"";
+				{CurrentNumber2,""};
 			_ ->
-				case Label1 of 
-					"" -> "";
-					_ -> "and "
-				end 
-				++ "the " ++ Type ++ " argument value " 
-				++ transform_value(ArgValue) ++ ".\n"
+				ets:insert(AnswerProblem, {CurrentNumber2,arg_value}),
+				{CurrentNumber2 + 1,
+				 integer_to_list(CurrentNumber2) ++ ".- The argument value: " 
+				 ++transform_value(ArgValue) ++ ".\n"}
 		end,
-	Label0 = 
-		case Label1 ++ Label2 of 
-			"" -> "";
-			_ -> "Given"
+	ets:insert(AnswerProblem, {CurrentNumber3,clause}),
+	Label4 = 
+		integer_to_list(CurrentNumber3) ++ ".- Enter in the " 
+		++ get_ordinal(ClauseNumber) ++ " clause.\n",
+	{CurrentNumber5,Label5} = 
+		case Bindings of 
+			[] -> 
+				{CurrentNumber3 + 1,""};
+			_ ->
+				ets:insert(AnswerProblem, {CurrentNumber3 + 1,bindings}),
+				{CurrentNumber3 + 2,
+				 integer_to_list(CurrentNumber3 + 1) ++ ".- The bindings:\n" 
+				 ++ get_context(Bindings) ++ "\n"}
 		end,
-	Label3 = "The " ++ Type ++ " expression\n" 
-		++ transform_abstract(ACase) ++"\nenters in the " 
-		++ get_ordinal(ClauseNumber) ++ " clause",
-	Label0 ++ Label1 ++ Label2 ++ Label3;
+	ets:insert(AnswerProblem, {CurrentNumber5,value}),
+	Label6 = 
+		integer_to_list(CurrentNumber5) ++ ".- The final value: " 
+		++ transform_value(FinalValue) ++ ".\n",
+	ets:insert(AnswerProblem, {CurrentNumber5+1,nothing}),
+	Label7 = 
+		integer_to_list(CurrentNumber5+1) ++ ".- Nothing.\n",
+	{Label1 ++ Label2 ++ Label3 ++ Label4 ++ Label5 ++ Label6 ++ Label7,AnswerProblem};
+
 build_question(Info) ->
-	Label = transform_label(Info),
 	{_,_,Deps} = Info,
-	case Deps of 
+	{case Deps of 
 		[] ->
-			io_lib:format("~s",[Label]);
+			transform_label(Info);
 		_ ->
-			Context = get_context(Deps),
-			io_lib:format("~s\nContext: ~s",[Label,Context])
-	end.
-	
+			case Info of 
+				{case_if_clause,{_, _,_,guard,_,_,_}, _} ->
+					transform_label(Info);
+				_ ->
+					"Given the context:\n" ++ get_context(Deps) ++ ",\n" ++ transform_label(Info)
+			end
+	end, []}.
+
+
 transform_label({'let',{VarName,Value,_},_}) -> 
-	atom_to_list(VarName) ++ " = " ++ transform_value(Value);
+	"the following variable is asigned:\n"
+	++atom_to_list(VarName) ++ " = " ++ transform_value(Value);
 transform_label({'let_multiple',{InfoVars,_},_}) -> 
-	get_context(InfoVars);
-% transform_label({case_if,{{ACase,Type},ArgValue,ClauseNumber,FinalValue,AFinalExpr},_}) ->
-% 	Type ++ " expression:\n" ++ transform_value(ACase) ++
-%      "\nenters in the " ++ get_ordinal(ClauseNumber) 
-%      ++ " clause.\nCase argument value: " ++ transform_value(ArgValue)
-%      ++ "\nFinal case value: " ++ transform_value(FinalValue);
-transform_label({case_if,{{_,_},_,_,FinalValue,AFinalExpr},_}) ->
-	%"The " ++ Type ++ " expression:\n" ++ transform_value(ACase) ++ "\n" ++
-     final_expression_message(FinalValue,AFinalExpr);
-transform_label({case_if_failed,{{ACase,Type},ArgValue,FinalValue},_}) ->
-	"The " ++ Type ++ " expression:\n" ++ transform_abstract(ACase)++
-     "\ndoes not enter in any clause."
-     ++ "\nCase argument value: " ++ transform_value(ArgValue)
-     ++ "\nFinal case value: " ++ transform_value(FinalValue);
-transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,SuccFail,Bindings}, _}) ->
+	"the following variables are asigned:\n"++get_context(InfoVars);
+transform_label({case_if_clause,{_, _,ClauseNumber,guard,SuccFail,_,_}, _}) ->
+	"Guard of the " ++ get_ordinal(ClauseNumber)  ++ " clause " ++ atom_to_list(SuccFail);
+transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,SuccFail,Bindings,GuardsDeps}, _}) ->
 	"The " ++ Type ++ " expression:\n" ++ transform_abstract(only_one_case_clause(ACase,ClauseNumber))
 	++ "\n" ++ 
 	case PatGuard of
@@ -362,20 +639,88 @@ transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,S
 			atom_to_list(PatGuard) ++ " of " 
 	end
 	++ get_ordinal(ClauseNumber) 
-	++ " clause " ++ atom_to_list(SuccFail) ++ "\n" ++ Type ++ " argument value :"
-	++ transform_value(ArgValue) ++
+	++ " clause " ++ atom_to_list(SuccFail) ++ 
+	case ArgValue of
+		[] ->
+			"";
+		_ ->
+			"\n" ++ Type ++ " argument value :" ++ transform_value(ArgValue)
+	end ++
 	case Bindings of 
 		[] -> 
 			"";
 		_ ->
-			"\nBindings: " ++ get_context(Bindings)
+			"\nBindings:\n" ++ get_context(Bindings)
+	end ++
+	case GuardsDeps of 
+		[] -> 
+			"";
+		_ ->
+			"\nGuard dependences:\n" ++ get_context(GuardsDeps)
 	end;
 transform_label({fun_clause,{FunDef,ClauseNumber,PatGuard,SuccFail},[]}) ->
-	"Function:\n" ++ transform_abstract(only_one_fun_clause(FunDef,ClauseNumber))
+	"The function:\n" ++ transform_abstract(only_one_fun_clause(FunDef,ClauseNumber))
     ++ "\n" ++ atom_to_list(PatGuard) ++ " of " ++ get_ordinal(ClauseNumber) 
 	++ " clause " ++ atom_to_list(SuccFail);
+% %THE FOLLOWING CASE IS ONLY FOR DOT. NEVER ASKED.
 transform_label({'root',{_,FinalValue,AFinalExpr},_}) -> 
 	final_expression_message(FinalValue,AFinalExpr).
+
+
+
+
+% % transform_label({case_if,{{ACase,Type},ArgValue,ClauseNumber,FinalValue,AFinalExpr},_}) ->
+% % 	Type ++ " expression:\n" ++ transform_value(ACase) ++
+% %      "\nenters in the " ++ get_ordinal(ClauseNumber) 
+% %      ++ " clause.\nCase argument value: " ++ transform_value(ArgValue)
+% %      ++ "\nFinal case value: " ++ transform_value(FinalValue);
+% % transform_label({case_if,{{_,_},_,_,FinalValue,AFinalExpr,_},_}) ->
+% % 	%"The " ++ Type ++ " expression:\n" ++ transform_value(ACase) ++ "\n" ++
+% %      final_expression_message(FinalValue,AFinalExpr);
+% transform_label({case_if_failed,{{ACase,Type},ArgValue,FinalValue},_}) ->
+% 	case ArgValue of 
+% 		[] -> "";
+% 		_ -> 
+% 	"and the " ++ Type ++ 
+% 	"the " ++ Type ++ " expression:\n" ++ transform_abstract(ACase)++
+%      "\ndoes not enter in any clause."
+% %      ++ "\nCase argument value: " ++ transform_value(ArgValue);
+% transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,SuccFail,Bindings,GuardsDeps}, _}) ->
+% 	"The " ++ Type ++ " expression:\n" ++ transform_abstract(only_one_case_clause(ACase,ClauseNumber))
+% 	++ "\n" ++ 
+% 	case PatGuard of
+% 		'pattern' ->
+% 			"matching with " ;
+% 		_ ->
+% 			atom_to_list(PatGuard) ++ " of " 
+% 	end
+% 	++ get_ordinal(ClauseNumber) 
+% 	++ " clause " ++ atom_to_list(SuccFail) ++ 
+% 	case ArgValue of
+% 		[] ->
+% 			"";
+% 		_ ->
+% 			"\n" ++ Type ++ " argument value :" ++ transform_value(ArgValue)
+% 	end ++
+% 	case Bindings of 
+% 		[] -> 
+% 			"";
+% 		_ ->
+% 			"\nBindings:\n" ++ get_context(Bindings)
+% 	end ++
+% 	case GuardsDeps of 
+% 		[] -> 
+% 			"";
+% 		_ ->
+% 			"\nGuard dependences:\n" ++ get_context(GuardsDeps)
+% 	end;
+% transform_label({fun_clause,{FunDef,ClauseNumber,PatGuard,SuccFail},[]}) ->
+% 	"The function:\n" ++ transform_abstract(only_one_fun_clause(FunDef,ClauseNumber))
+%     ++ "\n" ++ atom_to_list(PatGuard) ++ " of " ++ get_ordinal(ClauseNumber) 
+% 	++ " clause " ++ atom_to_list(SuccFail);
+% %THE FOLLOWING CASE IS ONLY FOR DOT. NEVER ASKED.
+% transform_label({'root',{_,FinalValue,AFinalExpr},_}) -> 
+% 	final_expression_message(FinalValue,AFinalExpr).
 
 
 
@@ -394,19 +739,10 @@ transform_value(Value) ->
 transform_abstract(Abstract) ->
 	erl_prettypr:format(Abstract).
 
-final_expression_message(FinalValue,AFinalExpr) ->
-	"The value " ++ transform_value(FinalValue) ++ " of the final expression " ++
-    case AFinalExpr of 
-     	[] -> "";
-     	[AFinalExpr_|_] -> 
-     		transform_abstract(AFinalExpr_) ++ " (Line " 
-     			++ integer_to_list(element(2,AFinalExpr_)) ++ ")"
-    end ++ " is not correct.".
-
 
 get_context([]) -> "";
 get_context(Deps) ->
-	"[" ++ get_context(Deps,[]) ++ "]".
+	get_context(Deps,[]).
 
 get_context([Entry|Deps],Acc) ->
 	{VarName,Value} = 
@@ -417,12 +753,12 @@ get_context([Entry|Deps],Acc) ->
 				{VarName_,Value_}
 		end,
 	VarValue =
-		atom_to_list(VarName) ++ " = " ++ transform_value(Value),
+		"\t"++atom_to_list(VarName) ++ " = " ++ transform_value(Value),
 	case Deps of 
 		[] -> 
 			Acc ++ VarValue;
 		_ -> 
-			get_context(Deps, Acc ++ VarValue ++ ", " )
+			get_context(Deps, Acc ++ VarValue ++"\n" )
 	end.
 
 only_one_case_clause(ACase,ClauseNumber) ->
@@ -435,6 +771,7 @@ only_one_case_clause(ACase,ClauseNumber) ->
 			Clauses = erl_syntax:if_expr_clauses(ACase),
 			Clause = lists:nth(ClauseNumber,Clauses),
 			erl_syntax:revert(erl_syntax:if_expr([Clause]));
+		%Falta el cas de que siga una clausula del handler
 		try_expr ->
 			Clauses = erl_syntax:try_expr_clauses(ACase),
 			Clause = lists:nth(ClauseNumber,Clauses),
@@ -485,9 +822,10 @@ dot_graph(G)->
 	
 	   
 dot_vertex({V,L}) ->
+	{Label,_} = build_question(L),
 	integer_to_list(V)++" "++"[shape=ellipse, label=\""
 	++integer_to_list(V)++" .- " 
-	++ change_new_lines(lists:flatten(build_question(L))) ++ "\"];\n".
+	++ change_new_lines(lists:flatten(Label)) ++ "\"];\n".
 
 dot_edge({V1,V2}) -> 
 	integer_to_list(V1)++" -> "++integer_to_list(V2)
