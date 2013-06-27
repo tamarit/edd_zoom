@@ -576,13 +576,13 @@ build_question({case_if,{{ACase,Type},ArgValue,ClauseNumber,FinalValue,_,Binding
 		end,
 	{CurrentNumber3,Label3} = 
 		case ArgValue of 
-			[] -> 
+			{} -> 
 				{CurrentNumber2,""};
 			_ ->
 				ets:insert(AnswerProblem, {CurrentNumber2,arg_value}),
 				{CurrentNumber2 + 1,
 				 integer_to_list(CurrentNumber2) ++ ".- The argument value: " 
-				 ++transform_value(ArgValue) ++ ".\n"}
+				 ++ transform_value(ArgValue) ++ ".\n"}
 		end,
 	ets:insert(AnswerProblem, {CurrentNumber3,clause}),
 	Label4 = 
@@ -622,6 +622,7 @@ build_question(Info) ->
 	end, []}.
 
 
+%falta tratar el case_if_failed
 transform_label({'let',{VarName,Value,_},_}) -> 
 	"the following variable is asigned:\n"
 	++atom_to_list(VarName) ++ " = " ++ transform_value(Value);

@@ -501,7 +501,7 @@ get_tree_case(Expr,Env,FreeV) ->
 		end,
 	AbstractCase = 
 		case cerl:get_ann(Expr) of 
-			[Line,{file,FileName}] ->
+			[Line,{file,FileName}|_] ->
 				case get_expression_from_abstract(FileName,Line,'case') of
 					[] ->
 						FunGetFromTry();
@@ -603,7 +603,7 @@ get_tree_case(Expr,Env,FreeV) ->
 				G = digraph:new([acyclic]),
 				ConcreteBArg = 
 					case BArgs of 
-						[] -> [];
+						[] -> {};
 						_ -> hd([cerl:concrete(BArg) || BArg <- BArgs])
 					end,
 				NNFreeV_ = 
@@ -941,6 +941,8 @@ get_tree(Expr,Env,FreeV) ->
 			[_,Line_,{file,File_}] ->
 				 [Line_,File_];
 			[Line_,{file,File_}] ->
+				[Line_,File_];
+			[Line_,{file,File_}|_] ->
 				[Line_,File_];
 			[] ->
 				[]
