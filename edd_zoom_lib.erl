@@ -521,7 +521,7 @@ ask_question(G,Selected,CurrentState,NSortedVertices)->
 												Info -> [Children, Selected];
 												_ -> [Selected]
 											end,
-					        			{digraph_utils:reachable([hd(WrongVertexs)], G) -- CorrectClauses,
+					        			{digraph_utils:reachable(WrongVertexs, G) -- (CorrectClauses ++ WrongVertexs),
 					        			 CorrectClauses ++ Correct,WrongVertexs ++ NotCorrect,Unknown,
 							             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
 							        nothing ->
