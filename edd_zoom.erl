@@ -151,6 +151,9 @@ build_graphs_and_add_bindings([Var | Vars],Env,FreeV,Value,Deps,ALet,GraphsAcc) 
 	     [$c,$o,$r | _] -> 
 	     	add_bindings_to_env([{Var,Value,Deps,null}],Env),
 	     	build_graphs_and_add_bindings(Vars,Env,FreeV,Value,Deps,GraphsAcc); 
+	     [$r,$e,$c | _] -> 
+	     	add_bindings_to_env([{Var,Value,Deps,null}],Env),
+	     	build_graphs_and_add_bindings(Vars,Env,FreeV,Value,Deps,GraphsAcc); 
 	     _ -> 
 	     	G = digraph:new([acyclic]),
 	     	ConcreteValue = 
@@ -196,6 +199,8 @@ get_dependences([Var | Vars], Env, Acc) ->
 			[{_,{Value,Deps_,Node}}|_] ->
 				case atom_to_list(VarName) of 
 					[$c,$o,$r | _] -> 
+						Deps_;
+					[$r,$e,$c | _] -> 
 						Deps_;
 					_ -> 
 						ConcreteValue = 
@@ -371,46 +376,50 @@ bind_vars(Expr,Env) ->
 
 
 get_expression_from_abstract(File,Line,Type) ->
-	{ok,Abstract} = smerl:for_file(File),
-	lists:flatten(
-		[erl_syntax_lib:fold(
-			fun(Tree,Acc) -> 
-				%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
-	       		case Tree of 
-	       			{'var',Line,_} when Type == 'var' ->
-						[Tree|Acc];
-	       			{'integer',Line,_} when Type == 'literal' ->
-						[Tree|Acc];
-					{'float',Line,_} when Type == 'literal' ->
-						[Tree|Acc];
-					{'string',Line,_} when Type == 'literal' ->
-						[Tree|Acc];
-					{'atom',Line,_} when Type == 'literal' ->
-						[Tree|Acc];
-					{'nil',Line} when Type == 'literal' ->
-						[Tree|Acc];
-					{'call',Line,_,_} when Type == 'call' ->
-						[Tree|Acc];
-					{'op',Line,_,_,_} when Type == 'call' ->
-						[Tree|Acc];
-					{'op',Line,_,_} when Type == 'call' ->
-						[Tree|Acc];
-	       			{'cons',Line,_,_} when Type == 'cons' ->
-						[Tree|Acc];
-					{'tuple',Line,_} when Type == 'tuple' ->
-						[Tree|Acc];
-					{'match',Line,_,_}  when Type == 'match' ->
-						[Tree|Acc];
-					{'case',Line,_,_} when Type == 'case' ->
-						[{Tree,"case"}|Acc];
-					{'if',Line,_} when Type == 'case' ->
-						[{Tree,"if"}|Acc];
-					{'lc',Line,_,_} when Type == 'lc' ->
-						[Tree|Acc];
-					_ -> 
-						Acc
-	       		end
-		     end, [], Form) || Form<-smerl:get_forms(Abstract)]).
+	case smerl:for_file(File) of 
+		{ok,Abstract} ->
+			lists:flatten(
+				[erl_syntax_lib:fold(
+					fun(Tree,Acc) -> 
+						%io:format("{Line,Tree}: ~p\n",[{Line,Tree}]),
+			       		case Tree of 
+			       			{'var',Line,_} when Type == 'var' ->
+								[Tree|Acc];
+			       			{'integer',Line,_} when Type == 'literal' ->
+								[Tree|Acc];
+							{'float',Line,_} when Type == 'literal' ->
+								[Tree|Acc];
+							{'string',Line,_} when Type == 'literal' ->
+								[Tree|Acc];
+							{'atom',Line,_} when Type == 'literal' ->
+								[Tree|Acc];
+							{'nil',Line} when Type == 'literal' ->
+								[Tree|Acc];
+							{'call',Line,_,_} when Type == 'call' ->
+								[Tree|Acc];
+							{'op',Line,_,_,_} when Type == 'call' ->
+								[Tree|Acc];
+							{'op',Line,_,_} when Type == 'call' ->
+								[Tree|Acc];
+			       			{'cons',Line,_,_} when Type == 'cons' ->
+								[Tree|Acc];
+							{'tuple',Line,_} when Type == 'tuple' ->
+								[Tree|Acc];
+							{'match',Line,_,_}  when Type == 'match' ->
+								[Tree|Acc];
+							{'case',Line,_,_} when Type == 'case' ->
+								[{Tree,"case"}|Acc];
+							{'if',Line,_} when Type == 'case' ->
+								[{Tree,"if"}|Acc];
+							{'lc',Line,_,_} when Type == 'lc' ->
+								[Tree|Acc];
+							_ -> 
+								Acc
+			       		end
+				     end, [], Form) || Form<-smerl:get_forms(Abstract)]);
+		_ -> 
+			[]
+	end.
 
 
 get_try_from_abstract(File,Line,Type) -> 
@@ -747,8 +756,10 @@ remove_core_vars_from_env([{Var,Value} | Tail]) ->
 	case atom_to_list(VarName) of
 	    [$c,$o,$r | _] ->
 	     	 remove_core_vars_from_env(Tail);
+	    [$r,$e,$c | _] ->
+	     	 remove_core_vars_from_env(Tail);
      	_ -> 
-     		[{VarName,cerl:concrete(Value)} |remove_core_vars_from_env(Tail)]
+     		[{VarName,Value} | remove_core_vars_from_env(Tail)]
 	end;
 remove_core_vars_from_env([]) -> [].
 
@@ -813,16 +824,16 @@ get_tree_call(Call,Env0,FreeV) ->
 	                      {c_literal,_,make_fun},_} | MayBeArity] ->
 	                       {_,_,CFunArity} = get_MFA(Function),
 	                       case lists:map(fun cerl:concrete/1,MayBeArity) of
-     	                            [] ->  {{c_literal,[],true},FreeV,[]};
-     	                            [CFunArity] -> {{c_literal,[],true},FreeV,[]};
-     	                            _ -> {{c_literal,[],false},FreeV,[]}
+     	                            [] ->  {{c_literal,[],true},FreeV,[],[]};
+     	                            [CFunArity] -> {{c_literal,[],true},FreeV,[],[]};
+     	                            _ -> {{c_literal,[],false},FreeV,[],[]}
      	                    end;
 	                     [{anonymous_function,_,AFunCore,_,_,_} | MayBeArity] ->
     	                       AFunArity = cerl:fun_arity(AFunCore),
     	                       case lists:map(fun cerl:concrete/1,MayBeArity) of
-    	                            [] ->  {{c_literal,[],true},FreeV,[]};
-    	                            [AFunArity] -> {{c_literal,[],true},FreeV,[]};
-    	                            _ -> {{c_literal,[],false},FreeV,[]}
+    	                            [] ->  {{c_literal,[],true},FreeV,[],[]};
+    	                            [AFunArity] -> {{c_literal,[],true},FreeV,[],[]};
+    	                            _ -> {{c_literal,[],false},FreeV,[],[]}
     	                       end; 
 	                     _ ->
 	                       {{c_literal,[],false},FreeV,[],[]}
