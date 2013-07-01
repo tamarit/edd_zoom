@@ -450,7 +450,7 @@ ask_question(G,Selected,CurrentState,NSortedVertices)->
 								       	QuestionClauses = "[" ++ [integer_to_list(AnswerNum)++"/"
 											 || AnswerNum <-  lists:seq(1, TotalClauses)]++"u/a]? ",
 										AnswerClauses =
-										 get_answer("Which clauses di you expect to be selected " ++ QuestionClauses,
+										 get_answer("Which clauses did you expect to be selected " ++ QuestionClauses,
 											[list_to_atom(integer_to_list(AnswerNum))
 											 || AnswerNum <-  lists:seq(1, TotalClauses)]++[u,a]),
 										case AnswerClauses of 
@@ -507,7 +507,7 @@ ask_question(G,Selected,CurrentState,NSortedVertices)->
 										[IdClauseSucceed] = 
 											[IdClause || {IdClause,_,NumClause,_} <- InfoClauses,NumClause =:= CurrentClause],
 										WrongVertexs = get_both_case_nodes(G, Selected,Info),
-										{[],Correct ++ digraph:out_neighbours([IdClauseSucceed]), [IdClauseSucceed | WrongVertexs ++ NotCorrect],Unknown,
+										{[],Correct ++ digraph:out_neighbours(G,[IdClauseSucceed]), [IdClauseSucceed | WrongVertexs ++ NotCorrect],Unknown,
 					             		[{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
 					             	value ->
 										[Children|_] = digraph:out_neighbours(G, Selected),
@@ -561,7 +561,7 @@ ask_question(G,Selected,CurrentState,NSortedVertices)->
 build_question({case_if,{{ACase,Type},ArgValue,ClauseNumber,FinalValue,_,Bindings,_},Deps}) ->
 	Label1 = "For the " ++ Type ++ " expression:\n" 
 		++ transform_abstract(ACase)++
-		"\nIs there anything incorret?\n",
+		"\nIs there anything incorrect?\n",
 	CurrentNumber = 1,
 	AnswerProblem = ets:new(env_answerproblem,[set]),
 	{CurrentNumber2,Label2} = 
@@ -734,7 +734,12 @@ transform_value(Value) ->
 			erl_prettypr:format(Value)
 	catch
 		_:_ ->
-			lists:flatten(io_lib:format("~p",[Value]))
+			try cerl:concrete(Value)  of 
+				Concrete -> 
+					lists:flatten(io_lib:format("~p",[Concrete]))
+			catch _:_ ->
+				lists:flatten(io_lib:format("~p",[Value]))
+			end
 	end.
 
 transform_abstract(Abstract) ->

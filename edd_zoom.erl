@@ -347,7 +347,8 @@ bind_vars(Expr,Env) ->
 			     	     		[{VarName,{Value,_,_}}|_] ->
 					     			case Value of
 					     	             {anonymous_function,_,_,_,_,_} -> Value;
-					     	             _ -> cerl:unfold_literal(Value)
+					     	             _ ->
+					     	             	cerl:unfold_literal(Value)
 					     	        end;
 					     	    _ ->
 					     	    	%Esto se anyade porque get_fun_from_file no tiene en cuenta las variables que se declaran dentro del cuerpo de la función y intenta buscarlas
@@ -549,7 +550,11 @@ get_tree_case(Expr,Env,FreeV) ->
 				false
 		end,
 	%io:format("Bindings: ~p\n", [Bindings]),
-	VarsBody = cerl_trees:variables(ClauseBody),
+	VarsBody = 
+		try 
+			cerl_trees:variables(ClauseBody)
+		catch _:_ -> []
+		end,
 	%io:format("VarsBody: ~p\n",[VarsBody]),
 	DepsBody = get_dependences(VarsBody,Env),
 	%io:format("DepsBody: ~p\n",[DepsBody]),
@@ -865,6 +870,7 @@ get_tree_call(Call,Env0,FreeV) ->
 	               ModCore = edd_zoom_lib:core_module(NFileAdress),
 	               EnvApply = ets:new(FunName, [set]),
 	               ets:insert(EnvApply, {core,ModCore}),
+	               add_bindings_to_env([ {Var, Value, [], null} || {Var,Value} <- lists:zip(Args,BArgs)],EnvApply),
 	               FunArity = cerl:call_arity(Call),
 	               get_tree_apply(cerl:ann_c_apply(cerl:get_ann(Call),
 	                            cerl:c_var({FunName,FunArity}),Args),
@@ -883,6 +889,8 @@ get_tree_apply(Apply,Env0,FreeV)->
 	%io:format("Apply: ~p\nFunVar: ~p\n",[Apply,FunVar]),
 	Pars = cerl:apply_args(Apply),
 	NPars = lists:map(fun(Par) -> bind_vars(Par,Env0) end,Pars),
+	%io:format("Env: ~p\n",[[ {I,L}|| {I,L} <- ets:tab2list(Env0),I=/='core']]),
+	%io:format("Pars: ~p\nNPars: ~p\n",[Pars,NPars]),
 	{core,Core} = hd(ets:lookup(Env0,core)),
 	FunDefs = cerl:module_defs(Core),
 	case FunVar of 
@@ -931,7 +939,7 @@ get_tree_apply(Apply,Env0,FreeV)->
 		end.
 	
 get_tree_apply_fun(Args,NPars,FreeV,FunBody,Env0) ->
-	%io:format("ENTRA: ~p\n",[Env0]),
+	%io:format("ENTRA: ~p\n",[NPars]),
 	Env = ets:new(env_temp, [set]),
 	add_bindings_to_env([ {Var, Value, [], null} || {Var,Value} <- lists:zip(Args,NPars)],Env),
 	%create_new_env(Args, NPars, Env),
