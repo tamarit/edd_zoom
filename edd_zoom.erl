@@ -494,6 +494,26 @@ get_try_from_abstract(File,Line,Type) ->
 get_tree_case(Expr,Env,FreeV) -> 
 	Args = cerl:case_arg(Expr),
 	{ArgsValue,_,_,_} = get_tree(Args,Env,FreeV),
+	% io:format("Args: ~p\n",[Args]),
+	% io:format("Type: ~p\n",[cerl:type(Args)]),
+	% io:format("Stored ~p\n",[ets:lookup(Env,let_graphs)]),
+	GraphsArgs =
+		case cerl:type(Args) of 
+	    	'var' -> 
+	    		VarLetArg = cerl:var_name(Args),
+	    		ResLookUp = ets:lookup(Env,let_graphs),
+	    		ets:delete(Env,let_graphs),
+	    		case ResLookUp of 
+	    			[{let_graphs,{VarLetArg,StoredGraphs}}] -> 
+	    				NG = digraph:new([acyclic]),
+						add_graphs_to_graph(NG,StoredGraphs),
+			    		[NG];
+			    	_ -> 
+			    		[]
+			    end;
+			_ ->
+				[]
+		end,
 	BArgs_ = bind_vars(ArgsValue,Env),
 	BArgs = 
 		case cerl:type(BArgs_) of
@@ -647,6 +667,9 @@ get_tree_case(Expr,Env,FreeV) ->
 							digraph:add_vertex(G,NNFreeV,Info),
 							digraph:add_vertex(G,NNFreeV+1,Info),
 							digraph:add_edge(G,NNFreeV ,NNFreeV + 1), 
+						    add_graphs_to_graph(G,GraphsArgs),
+							[digraph:add_edge(G,NNFreeV,edd_zoom_lib:look_for_root(G_)) 
+							 	    || G_ <-  GraphsArgs],
 							NNFreeV + 1
 					end,
 				[begin
@@ -1105,7 +1128,7 @@ get_tree(Expr,Env,FreeV) ->
 			     	case cerl:get_ann(Expr) of 
 						[Line,{file,FileName}] ->
 							%io:format("INSERTA\n"),
-							ets:insert(Env,{current_try,{FileName,Line,catch_of_try}});
+							ets:insert(Env,{current_try,{FileName,Line,"catch_of_try"}});
 						[] ->
 							ok
 					end, 
@@ -1118,7 +1141,7 @@ get_tree(Expr,Env,FreeV) ->
 			                  end,cerl:try_vars(Expr)),
 			       	case cerl:get_ann(Expr) of 
 						[Line,{file,FileName}] ->
-							ets:insert(Env,{current_try,{FileName,Line,'try'}});
+							ets:insert(Env,{current_try,{FileName,Line,"try"}});
 						[] ->
 							ok
 					end, 

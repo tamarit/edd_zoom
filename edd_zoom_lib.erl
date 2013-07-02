@@ -239,15 +239,28 @@ get_ordinal(7) -> "seventh";
 get_ordinal(N) ->
 	integer_to_list(N)++"th".
 
+
+get_children_with_same_info(G,Selected,Info) ->
+	Childrens = digraph:out_neighbours(G, Selected),
+	lists:flatten(
+		[begin 
+			{Children,ChildrenInfo} = digraph:vertex(G,Children),
+			case ChildrenInfo of 
+				Info -> 
+					[Children];
+				_ ->
+					[]
+			end
+		 end || Children <- Childrens]).
+
 get_both_case_nodes(G,Selected,Info) ->
 	[Parent] = digraph:in_neighbours(G, Selected),
-	[Children|_] = digraph:out_neighbours(G, Selected),
-	{Parent,ParentInfo} = digraph:vertex(G,Parent),
+	{Parent,ParentInfo} = digraph:vertex(G,Parent), 
 	case ParentInfo of 
 		Info -> 
 			[Selected,Parent];
 		_ -> 
-			[Children,Selected]
+			[hd(get_children_with_same_info(G,Selected,Info)),Selected]
 	end.
 	
 
@@ -280,11 +293,16 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 							     end} || V <- Vertices]
 				  end,				
 				SortedVertices = lists:keysort(2,VerticesWithValues),
-				Selected_ = element(1,hd(SortedVertices)),
-				NSortedVertices_ = 
-					lists:flatten(
-						[digraph_utils:reachable([V], G) || {V,_} <- tl(SortedVertices)]) 
-					-- (Correct ++ NotCorrect ++ Unknown),
+				{Selected_,NSortedVertices_} = 
+					case SortedVertices of 
+						[] -> {-1,[]};
+						[H|T] -> 
+							{element(1,H),
+							 lists:flatten(
+							 	[digraph_utils:reachable([V], G) || {V,_} <- T]) 
+							 -- (Correct ++ NotCorrect ++ Unknown)}
+
+					end,
 				{Selected_, NSortedVertices_};
 			_ ->
 				{PreSelected, Vertices -- [PreSelected]}
@@ -351,6 +369,10 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 
 	
 %EN preguntes dobles tindre en conter el undo	
+ask_question(_,-1,CurrentState,[])->
+	{_,Correct,NotCorrect,Unknown,State,Strategy,PreSelected} = CurrentState,
+	NCurrentState = {[],Correct,NotCorrect,Unknown,State,Strategy,PreSelected},
+	{c,NCurrentState};
 ask_question(G,Selected,CurrentState,NSortedVertices)->
 	{Selected,Info} = digraph:vertex(G,Selected),
 	case Info of 
@@ -425,7 +447,13 @@ ask_question(G,Selected,CurrentState,NSortedVertices)->
 												Info -> Parent;
 												_ -> Selected
 											end,
-					        			{[],digraph_utils:reachable([WrongVertex],G) ++ Correct,[WrongVertex|NotCorrect],Unknown,
+										WrongVertexs = 
+											case get_children_with_same_info(G,Selected,Info) of 
+												[] -> [Selected];
+												[Children] -> [Children,Selected]
+											end,
+					        			{digraph_utils:reachable([WrongVertex],G) -- digraph_utils:reachable([hd(WrongVertexs)],G), 
+					        			 digraph_utils:reachable([hd(WrongVertexs)],G) ++ Correct,[WrongVertex|NotCorrect],Unknown,
 							             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
 							        clause -> 
 							        	%Quant sols te una clausula no te sentit preguntar-li res.
@@ -510,16 +538,14 @@ ask_question(G,Selected,CurrentState,NSortedVertices)->
 										{[],Correct ++ digraph:out_neighbours(G,[IdClauseSucceed]), [IdClauseSucceed | WrongVertexs ++ NotCorrect],Unknown,
 					             		[{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
 					             	value ->
-										[Children|_] = digraph:out_neighbours(G, Selected),
-										{Children,ChildrenInfo} = digraph:vertex(G,Children),
 										{case_if,{_,_,_,_,_,_,InfoClauses},_} = Info,
 										CorrectClauses = 
 											[IdClause || {IdClause,_,_,_} <- InfoClauses] 
 											++ [IdClause + 1 || {IdClause,2,_,_} <- InfoClauses],
 										WrongVertexs = 
-											case ChildrenInfo of 
-												Info -> [Children, Selected];
-												_ -> [Selected]
+											case get_children_with_same_info(G,Selected,Info) of 
+												[Children] -> [Children, Selected];
+												[] -> [Selected]
 											end,
 					        			{digraph_utils:reachable(WrongVertexs, G) -- (CorrectClauses ++ WrongVertexs),
 					        			 CorrectClauses ++ Correct,WrongVertexs ++ NotCorrect,Unknown,
