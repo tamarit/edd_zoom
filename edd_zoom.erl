@@ -56,7 +56,7 @@ zoom_graph(Expr)->
 		case LastExprInfo of 
 			[TypeLastExpr,Line,File] ->
 				get_expression_from_abstract(File,Line,TypeLastExpr);
-			[] -> 
+			_ -> 
 				[]
 		end,
 	%io:format("ALastExpr:~p\n",[ALastExpr]),
@@ -601,7 +601,7 @@ get_tree_case(Expr,Env,FreeV) ->
 		case LastExprInfo of 
 			[TypeLastExpr,LineLastExpr,FileLastExpr] ->
 				get_expression_from_abstract(FileLastExpr,LineLastExpr,TypeLastExpr);
-			[] -> 
+			_ -> 
 				[]
 		end,
 	{NNNFreeV, CaseGraphs} = 
@@ -640,19 +640,23 @@ get_tree_case(Expr,Env,FreeV) ->
 						[] -> {};
 						_ -> hd([cerl:concrete(BArg) || BArg <- BArgs])
 					end,
+				GuardsDepsClauses = 
+					lists:flatten([GuardsDeps || {_,_,_,_,GuardsDeps,_} <- GraphsClauses]),
+				InfoClausesCase = 
+					[{NumNode,TotalNodes,CaseClause,SuccFail}  
+					 || {NumNode,TotalNodes,CaseClause,_,_,SuccFail} <- GraphsClauses],
 				NNFreeV_ = 
 					case ClauseNumber =:= length(Clauses) of 
 						true -> 
 							digraph:add_vertex(G,NNFreeV,
-								{case_if_failed,{hd(AbstractCase),
-								 ConcreteBArg,
-								 cerl:concrete(cerl:fold_literal(Value))},Deps}),
+								{case_if_failed,
+								 {hd(AbstractCase),
+								  ConcreteBArg,
+								  cerl:concrete(cerl:fold_literal(Value)),
+								  InfoClausesCase},
+								 lists:usort(Deps ++ GuardsDepsClauses)}),
 							NNFreeV;
 						false ->
-							GuardsDepsClauses = 
-								 lists:flatten([GuardsDeps || {_,_,_,_,GuardsDeps,_} <- GraphsClauses]),
-							InfoClausesCase = 
-								[{NumNode,TotalNodes,CaseClause,SuccFail}  || {NumNode,TotalNodes,CaseClause,_,_,SuccFail} <- GraphsClauses],
 							Info = 								
 							 	{case_if,
 								 {hd(AbstractCase),
@@ -1128,7 +1132,7 @@ get_tree(Expr,Env,FreeV) ->
 			     	case cerl:get_ann(Expr) of 
 						[Line,{file,FileName}] ->
 							%io:format("INSERTA\n"),
-							ets:insert(Env,{current_try,{FileName,Line,"catch_of_try"}});
+							ets:insert(Env,{current_try,{FileName,Line,"catch of try"}});
 						[] ->
 							ok
 					end, 
@@ -1208,7 +1212,7 @@ get_tree(Expr,Env,FreeV) ->
 		          	catch _:_ -> bind_vars(Arg,Env)
 		          	end
 		          || Arg <- cerl:primop_args(Expr)]}},
-		        FreeV,[]};
+		        FreeV,[],[]};
 		_ -> throw({error,"Non treated expression",Expr})%,
 		     %{Expr,FreeV,[],[]}	
 	end.

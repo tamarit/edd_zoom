@@ -192,28 +192,24 @@ print_buggy_info({'let_multiple',{InfoVars,ALetArg},_}) ->
 			"\nin the expression:\n" ++ transform_abstract(ALetArg_) ++ " (Line " 
      		++ integer_to_list(element(2,ALetArg_)) ++ ")."
 	end;
-print_buggy_info({case_if,{{ACase,Type},_,_,_,_,_,_},_}) ->
-    "Argument value of the " ++ Type ++ " exprressiom:\n" ++
+print_buggy_info({case_if,{{ACase,Type},ArgValue,_,_,_,_,_},_}) ->
+    "Argument value "++ transform_value(ArgValue) ++" of the " ++ Type ++ " exprressiom:\n" ++
     transform_abstract(ACase) ++ 
     "\nis not correct.";
 print_buggy_info({case_if_2,{_,_,_,FinalValue,AFinalExpr,_,_},_}) ->
      final_expression_message(FinalValue,AFinalExpr);
-print_buggy_info({case_if_failed,{{ACase,Type},ArgValue,_},_}) ->
-	"The " ++ Type ++ " expression:\n" ++ transform_abstract(ACase) ++
-    case ArgValue of
-		[] ->
-			"";
-		_ ->
-			"\nits argument value " ++ transform_value(ArgValue) ++ " is not correct."
-	end;
+print_buggy_info({case_if_failed,{{ACase,Type},ArgValue,_,_},_}) ->
+    "Argument value "++ transform_value(ArgValue) ++" of the " ++ Type ++ " exprressiom:\n" ++
+    transform_abstract(ACase) ++ 
+    "\nis not correct.";
 print_buggy_info({case_if_clause,{{ACase,Type}, _, ClauseNumber,PatGuard,_,_,_}, _}) ->
 	"The " ++ atom_to_list(PatGuard) ++ " of the " ++
 	get_ordinal(ClauseNumber) ++ " clause of " ++
-	Type ++ " expression:\n" ++ transform_abstract(only_one_case_clause(ACase,ClauseNumber));
+	Type ++ " expression:\n" ++ transform_abstract(only_one_case_clause(ACase,ClauseNumber,Type));
 print_buggy_info({fun_clause,{FunDef,ClauseNumber,PatGuard,_},[]}) ->
 	"The " ++ atom_to_list(PatGuard) ++ " of the " ++
 	get_ordinal(ClauseNumber) ++ " clause of " ++
-	" function definition:\n" ++ transform_abstract(only_one_case_clause(FunDef,ClauseNumber));
+	" function definition:\n" ++ transform_abstract(only_one_case_clause(FunDef,ClauseNumber,"fun"));
 print_buggy_info({'root',{_,FinalValue,AFinalExpr},_}) -> 
 	final_expression_message(FinalValue,AFinalExpr).
 
@@ -260,7 +256,12 @@ get_both_case_nodes(G,Selected,Info) ->
 		Info -> 
 			[Selected,Parent];
 		_ -> 
-			[hd(get_children_with_same_info(G,Selected,Info)),Selected]
+			case get_children_with_same_info(G,Selected,Info) of 
+				[H|_] ->
+					[H,Selected];
+				_ ->
+					[Selected]
+			end
 	end.
 	
 
@@ -426,7 +427,7 @@ ask_question(G,Selected,CurrentState,NSortedVertices)->
 							NState = 
 								case Problem of 
 									context -> 
-										{case_if,_,DepsSelected} = Info,
+										DepsSelected = element(3,Info),
 							        	case DepsSelected of 
 							        		[{_,{_,NextQuestion}}] ->
 							        			{NSortedVertices -- digraph_utils:reachable([Selected],G),
@@ -457,7 +458,13 @@ ask_question(G,Selected,CurrentState,NSortedVertices)->
 							             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
 							        clause -> 
 							        	%Quant sols te una clausula no te sentit preguntar-li res.
-							        	{case_if,{{ACase,Type},_,CurrentClause,_,_,_,InfoClauses},_} = Info,
+							        	{ACase,Type,CurrentClause,InfoClauses} =
+								        	case Info of 
+												{case_if,{{ACase_,Type_},_,CurrentClause_,_,_,_,InfoClauses_},_} ->
+													{ACase_,Type_,CurrentClause_,InfoClauses_};
+												{case_if_failed,{{ACase_,Type_},_,_,InfoClauses_},_} ->
+													{ACase_,Type_,length(InfoClauses_)+1,InfoClauses_}
+								        	end,
 							        	TotalClauses = 
 								        	length(
 								        		case element(1,ACase) of 
@@ -632,7 +639,39 @@ build_question({case_if,{{ACase,Type},ArgValue,ClauseNumber,FinalValue,_,Binding
 	Label7 = 
 		integer_to_list(CurrentNumber5+1) ++ ".- Nothing.\n",
 	{Label1 ++ Label2 ++ Label3 ++ Label4 ++ Label5 ++ Label6 ++ Label7,AnswerProblem};
-
+build_question({case_if_failed,{{ACase,Type},ArgValue,_,_},Deps}) ->
+	Label1 = "For the " ++ Type ++ " expression:\n" 
+		++ transform_abstract(ACase)++
+		"\nIs there anything incorrect?\n",
+	CurrentNumber = 1,
+	AnswerProblem = ets:new(env_answerproblem,[set]),
+	{CurrentNumber2,Label2} = 
+		case Deps of 
+			[] -> 
+				{CurrentNumber,""};
+			_ ->
+				ets:insert(AnswerProblem, {CurrentNumber,context}),
+				{CurrentNumber + 1,
+				 integer_to_list(CurrentNumber) ++ ".- The context:\n" 
+				 ++ get_context(Deps) ++ "\n"}
+		end,
+	{CurrentNumber3,Label3} = 
+		case ArgValue of 
+			{} -> 
+				{CurrentNumber2,""};
+			_ ->
+				ets:insert(AnswerProblem, {CurrentNumber2,arg_value}),
+				{CurrentNumber2 + 1,
+				 integer_to_list(CurrentNumber2) ++ ".- The argument value: " 
+				 ++ transform_value(ArgValue) ++ ".\n"}
+		end,
+	ets:insert(AnswerProblem, {CurrentNumber3,clause}),
+	Label4 = 
+		integer_to_list(CurrentNumber3) ++ ".- Does not enter in any clause.\n",
+	ets:insert(AnswerProblem, {CurrentNumber3+1,nothing}),
+	Label5 = 
+		integer_to_list(CurrentNumber3+1) ++ ".- Nothing.\n",
+	{Label1 ++ Label2 ++ Label3 ++ Label4 ++ Label5,AnswerProblem};
 build_question(Info) ->
 	{_,_,Deps} = Info,
 	{case Deps of 
@@ -655,9 +694,9 @@ transform_label({'let',{VarName,Value,_},_}) ->
 transform_label({'let_multiple',{InfoVars,_},_}) -> 
 	"the following variables are asigned:\n"++get_context(InfoVars);
 transform_label({case_if_clause,{_, _,ClauseNumber,guard,SuccFail,_,_}, _}) ->
-	"Guard of the " ++ get_ordinal(ClauseNumber)  ++ " clause " ++ atom_to_list(SuccFail);
+	"Guard of the " ++ get_ordinal(ClauseNumber)  ++ " clause " ++ atom_to_list(SuccFail) ++ ".\nIs this correct";
 transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,SuccFail,Bindings,GuardsDeps}, _}) ->
-	"The " ++ Type ++ " expression:\n" ++ transform_abstract(only_one_case_clause(ACase,ClauseNumber))
+	"The " ++ Type ++ " expression:\n" ++ transform_abstract(only_one_case_clause(ACase,ClauseNumber,Type))
 	++ "\n" ++ 
 	case PatGuard of
 		'pattern' ->
@@ -686,9 +725,9 @@ transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,S
 			"\nGuard dependences:\n" ++ get_context(GuardsDeps)
 	end;
 transform_label({fun_clause,{FunDef,ClauseNumber,PatGuard,SuccFail},[]}) ->
-	"The function:\n" ++ transform_abstract(only_one_fun_clause(FunDef,ClauseNumber))
+	"In the function:\n" ++ transform_abstract(only_one_fun_clause(FunDef,ClauseNumber))
     ++ "\n" ++ atom_to_list(PatGuard) ++ " of " ++ get_ordinal(ClauseNumber) 
-	++ " clause " ++ atom_to_list(SuccFail);
+	++ " clause " ++ atom_to_list(SuccFail)++".\nIs this correct";
 % %THE FOLLOWING CASE IS ONLY FOR DOT. NEVER ASKED.
 transform_label({'root',{_,FinalValue,AFinalExpr},_}) -> 
 	final_expression_message(FinalValue,AFinalExpr).
@@ -793,25 +832,38 @@ get_context([Entry|Deps],Acc) ->
 			get_context(Deps, Acc ++ VarValue ++"\n" )
 	end.
 
-only_one_case_clause(ACase,ClauseNumber) ->
-	case erl_syntax:type(ACase) of 
-		case_expr ->
+only_one_case_clause(ACase,ClauseNumber,Type) ->
+	case Type of 
+		"case" ->
 			Clauses = erl_syntax:case_expr_clauses(ACase),
 			Clause = lists:nth(ClauseNumber,Clauses),
 			erl_syntax:revert(erl_syntax:case_expr(erl_syntax:case_expr_argument(ACase),[Clause]));
-		if_expr ->
+		"if" ->
 			Clauses = erl_syntax:if_expr_clauses(ACase),
 			Clause = lists:nth(ClauseNumber,Clauses),
 			erl_syntax:revert(erl_syntax:if_expr([Clause]));
-		%Falta el cas de que siga una clausula del handler
-		try_expr ->
+		"try" ->
 			Clauses = erl_syntax:try_expr_clauses(ACase),
 			Clause = lists:nth(ClauseNumber,Clauses),
 			erl_syntax:revert(erl_syntax:try_expr(
 				erl_syntax:try_expr_body(ACase),
 				[Clause],
 				erl_syntax:try_expr_handlers(ACase),
-				erl_syntax:try_expr_after(ACase)))
+				erl_syntax:try_expr_after(ACase)));
+		"catch of try" ->
+			Clauses = erl_syntax:try_expr_handlers(ACase),
+			Clause = lists:nth(ClauseNumber,Clauses),
+			erl_syntax:revert(erl_syntax:try_expr(
+				erl_syntax:try_expr_body(ACase),
+				erl_syntax:try_expr_clauses(ACase),
+				[Clause],
+				erl_syntax:try_expr_after(ACase)));
+		"fun" ->
+			Clauses = erl_syntax:function_clauses(ACase),
+			Clause = lists:nth(ClauseNumber,Clauses),
+			erl_syntax:revert(erl_syntax:function(
+				erl_syntax:function_name(ACase),
+				[Clause]))
 	end.
 
 only_one_fun_clause(AFun,ClauseNumber) ->
