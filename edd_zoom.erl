@@ -520,6 +520,7 @@ get_tree_case(Expr,Env,FreeV) ->
 			values -> cerl:values_es(BArgs_);
 			_ -> [BArgs_]
 		end,
+	Clauses = cerl:case_clauses(Expr),
 	FunGetFromTry = 
 		fun() ->
 			case ets:lookup(Env,current_try) of
@@ -529,17 +530,28 @@ get_tree_case(Expr,Env,FreeV) ->
 					get_try_from_abstract(FileNameTry,LineTry,TryType)
 			end
 		end,
+	ErrorCaseType = 
+		try
+			cerl:concrete(lists:nth(1,cerl:tuple_es(lists:nth(1,cerl:primop_args(cerl:clause_body(lists:last(Clauses)))))))
+		catch
+			_:_ -> none 
+		end,
 	AbstractCase = 
-		case cerl:get_ann(Expr) of 
-			[Line,{file,FileName}|_] ->
-				case get_expression_from_abstract(FileName,Line,'case') of
+		case ErrorCaseType of 
+			badmatch -> 
+				[];
+			_ ->
+				case cerl:get_ann(Expr) of 
+					[Line,{file,FileName}|_] ->
+						case get_expression_from_abstract(FileName,Line,'case') of
+							[] ->
+								FunGetFromTry();
+							AbstractCase_ ->
+								AbstractCase_
+						end;
 					[] ->
-						FunGetFromTry();
-					AbstractCase_ ->
-						AbstractCase_
-				end;
-			[] ->
-				FunGetFromTry()
+						FunGetFromTry()
+				end
 		end,
 	ets:delete(Env,current_try),
 	HasAbstractOrIsInitial = 
@@ -558,7 +570,6 @@ get_tree_case(Expr,Env,FreeV) ->
 	Deps = lists:flatten([try get_dependences(cerl_trees:variables(ArgsElem),Env) 
 						  catch _:_ -> []
 						  end || ArgsElem <- ListArgs]),
-    Clauses = cerl:case_clauses(Expr),
 	{ClauseNumber,ClauseBody,Bindings,NFreeV_,GraphsClauses} = 
 		get_clause_body(Clauses,Clauses,HasAbstractOrIsInitial,BArgs,Env,FreeV,Deps,1),
 	IsInitial = 
