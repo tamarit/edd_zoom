@@ -494,9 +494,9 @@ get_try_from_abstract(File,Line,Type) ->
 get_tree_case(Expr,Env,FreeV) -> 
 	Args = cerl:case_arg(Expr),
 	{ArgsValue,_,_,_} = get_tree(Args,Env,FreeV),
-	% io:format("Args: ~p\n",[Args]),
-	% io:format("Type: ~p\n",[cerl:type(Args)]),
-	% io:format("Stored ~p\n",[ets:lookup(Env,let_graphs)]),
+	%io:format("Args: ~p\n",[Args]),
+	%io:format("Type: ~p\n",[cerl:type(Args)]),
+	%io:format("Stored ~p\n",[ets:lookup(Env,let_graphs)]),
 	GraphsArgs =
 		case cerl:type(Args) of 
 	    	'var' -> 
@@ -589,7 +589,19 @@ get_tree_case(Expr,Env,FreeV) ->
 							[]
 					end,
 				%io:format("ALetCase: ~p\n",[ALet]),
-				build_graphs_and_add_bindings(Bindings,Env,NFreeV_,Deps,ALet,[]);
+				InfoBinding = 
+					build_graphs_and_add_bindings(Bindings,Env,NFreeV_,Deps,ALet,[]),
+				case InfoBinding of 
+					{[],_} -> 
+						InfoBinding;
+					{GraphsBindings_,NFreeVBindings} ->
+							GBindings = digraph:new([acyclic]),
+							add_graphs_to_graph(GBindings,GraphsBindings_),
+							add_graphs_to_graph(GBindings,GraphsArgs),
+							[digraph:add_edge(GBindings,NFreeV_,edd_zoom_lib:look_for_root(G_)) 
+							 	    || G_ <-  GraphsArgs],
+							{[GBindings],NFreeVBindings}
+				end;
 			_ ->
 				add_bindings_to_env(Bindings,Env),
 				{[],NFreeV_}
