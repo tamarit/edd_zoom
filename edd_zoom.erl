@@ -83,6 +83,7 @@ zoom_graph(Expr)->
 		% end,
 	add_graphs_to_graph(G,Graphs),
 	[digraph:add_edge(G,FreeV,edd_zoom_lib:look_for_root(G_)) || G_ <- Graphs],
+	io:format("Total number of tree nodes: ~p\n",[length(digraph:vertices(G))]),
 	edd_zoom_lib:dot_graph_file(G,"dbg_zoom"),
 	edd_zoom_lib:ask(G,top_down),
 	%io:format("Env final:\n~p\n",[ets:tab2list(Env)]),
