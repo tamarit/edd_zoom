@@ -12,6 +12,7 @@ zoom_graph(Expr)->
 	%Clause = 1, %Te que ser un parametro
     {ok,[AExpr|_]} = edd_zoom_lib:parse_expr(Expr++"."),
     FunOperator = erl_syntax:application_operator(AExpr),
+    %io:format("FunOperator:~p\n",[FunOperator]),
     FunArity = length(erl_syntax:application_arguments(AExpr)),
     Env = ets:new(env,[set]),
     CoreArgs = [
@@ -25,8 +26,14 @@ zoom_graph(Expr)->
 					%Obtiene el CORE de la expresión Expr
 					{ok,_,CoreP} = smerl:compile2(M2,[to_core,binary,no_copt]), 
 					CoreFun = extract_call(CoreP),
-					[{id,{_,_,FunName}},_,{file,File}] = cerl:get_ann(CoreFun),
-					{anonymous_function,FunName,CoreFun,File,Arg,[]}
+					%io:format("CoreFun:~p\n",[CoreFun]),
+					case cerl:type(CoreFun) of 
+						call ->
+							CoreFun;
+						_ ->
+							[{id,{_,_,FunName}},_,{file,File}] = cerl:get_ann(CoreFun),
+							{anonymous_function,FunName,CoreFun,File,Arg,[]}
+					end
     			end
     	end
                 || Arg <- erl_syntax:application_arguments(AExpr)],
