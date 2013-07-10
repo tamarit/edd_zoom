@@ -726,7 +726,14 @@ transform_label({case_if_clause,{{ACase,Type}, ArgValue, ClauseNumber,PatGuard,S
 	end;
 transform_label({fun_clause,{FunDef,ClauseNumber,PatGuard,SuccFail},[]}) ->
 	"In the function:\n" ++ transform_abstract(only_one_fun_clause(FunDef,ClauseNumber))
-    ++ "\n" ++ atom_to_list(PatGuard) ++ " of " ++ get_ordinal(ClauseNumber) 
+    ++ "\n" ++ 
+    case PatGuard of
+    	'pattern' ->
+    			"matching with ";
+		_ ->
+			atom_to_list(PatGuard) ++ " of "  
+    end
+    ++ get_ordinal(ClauseNumber) 
 	++ " clause " ++ atom_to_list(SuccFail)++".\nIs this correct";
 % %THE FOLLOWING CASE IS ONLY FOR DOT. NEVER ASKED.
 transform_label({'root',{_,FinalValue,AFinalExpr},_}) -> 
