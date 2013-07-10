@@ -168,6 +168,8 @@ build_graphs_and_add_bindings([Var | Vars],Env,FreeV,Value,Deps,ALet,GraphsAcc) 
 	     		case Value of
 	     			{anonymous_function,_,_,_,_,_}  ->
 	     				get_abstract_form(Value);
+	     			{c_call,_,_,_,_}  ->
+	     				get_abstract_form(Value);
 	     			_ ->
 	     				cerl:concrete(cerl:fold_literal(Value))
 	     		end,
@@ -212,12 +214,14 @@ get_dependences([Var | Vars], Env, Acc) ->
 						Deps_;
 					_ -> 
 						ConcreteValue = 
-						case Value of 
-							{anonymous_function,_,_,_,_,_} -> 
-								get_abstract_form(Value);
-							_ -> 
-								cerl:concrete(Value)
-						end,
+							case Value of 
+								{anonymous_function,_,_,_,_,_} -> 
+									get_abstract_form(Value);
+								{c_call,_,_,_,_} -> 
+									get_abstract_form(Value);
+								_ -> 
+									cerl:concrete(Value)
+							end,
 						[{VarName,{ConcreteValue,Node}}]
 				end
 		end,
