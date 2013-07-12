@@ -270,10 +270,10 @@ asking_loop(_,Strategy,[],Correct,NotCorrect,Unknown,State,_) ->
 	{Correct,NotCorrect,Unknown,State,Strategy};
 asking_loop(_,Strategy,[-1],_,_,_,_,_) -> {[-1],[-1],[-1],[],Strategy};
 asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
-	%io:format("Selectable: ~w\n",[lists:sort(Vertices)]),
-	%io:format("Correct: ~w\n",[lists:sort(Correct)]),
-	%io:format("NotCorrect: ~w\n",[lists:sort(NotCorrect)]),
-	%io:format("Unknown: ~w\n",[lists:sort(Unknown)]),
+	% io:format("Selectable: ~w\n",[lists:sort(Vertices)]),
+	% io:format("Correct: ~w\n",[lists:sort(Correct)]),
+	% io:format("NotCorrect: ~w\n",[lists:sort(NotCorrect)]),
+	% io:format("Unknown: ~w\n",[lists:sort(Unknown)]),
 	{Selected,NSortedVertices} = 
 		case PreSelected of
 			-1 ->
@@ -293,18 +293,17 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 							         abs(TotalReach - Rest)
 							     end} || V <- Vertices]
 				  end,				
-				SortedVertices = lists:keysort(2,VerticesWithValues),
-				{Selected_,NSortedVertices_} = 
-					case SortedVertices of 
-						[] -> {-1,[]};
-						[H|T] -> 
-							{element(1,H),
-							 lists:flatten(
-							 	[digraph_utils:reachable([V], G) || {V,_} <- T]) 
-							 -- (Correct ++ NotCorrect ++ Unknown)}
+				SortedVertices = lists:keysort(2,VerticesWithValues), 
+				case SortedVertices of 
+					[] -> {-1,[]};
+					[H|T] -> 
+						%io:format("SortedVertices: ~p\n", [SortedVertices]),
+						{element(1,H),
+						 lists:flatten(
+						 	[digraph_utils:reachable([V], G) || {V,_} <- T]) 
+						 -- (Correct ++ NotCorrect ++ Unknown)}
 
-					end,
-				{Selected_, NSortedVertices_};
+				end;
 			_ ->
 				{PreSelected, Vertices -- [PreSelected]}
 		end,
@@ -318,6 +317,7 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 	             [Selected|Correct],NotCorrect,Unknown,
 	             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1},
 	            %end, 
+	%io:format("Selected: ~p\n",[Selected]),
 	CurrentState = {Vertices,Correct,NotCorrect,Unknown,State,Strategy,PreSelected},
 	{Answer,StateQuestion} = ask_question(G,Selected,CurrentState,NSortedVertices),
 	{NVertices,NCorrect,NNotCorrect,NUnknown,NState,NStrategy,NPreSelected} = 
@@ -366,7 +366,7 @@ asking_loop(G,Strategy,Vertices,Correct,NotCorrect,Unknown,State,PreSelected) ->
 	        c -> StateQuestion;
 	        _ -> CurrentState
 	   end, 
-	asking_loop(G,NStrategy,NVertices,NCorrect,NNotCorrect,NUnknown,NState,NPreSelected).
+	asking_loop(G,NStrategy,lists:usort(NVertices),lists:usort(NCorrect),lists:usort(NNotCorrect),lists:usort(NUnknown),NState,NPreSelected).
 
 	
 %EN preguntes dobles tindre en conter el undo	
@@ -558,7 +558,14 @@ ask_question(G,Selected,CurrentState,NSortedVertices)->
 					        			 CorrectClauses ++ Correct,WrongVertexs ++ NotCorrect,Unknown,
 							             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1};
 							        nothing ->
-										{NSortedVertices -- [Selected],[Selected|Correct],NotCorrect,Unknown,
+							        	WrongVertexs = 
+											case get_children_with_same_info(G,Selected,Info) of 
+												[Children] -> [Children, Selected];
+												[] -> [Selected]
+											end,
+							        	ReachableFromSelected = 
+							        		digraph_utils:reachable(WrongVertexs, G),
+										{NSortedVertices -- ReachableFromSelected,ReachableFromSelected ++ Correct,NotCorrect,Unknown,
 							             [{Vertices,Correct,NotCorrect,Unknown,PreSelected}|State],Strategy,-1}
 								end,
 							case NState of 
